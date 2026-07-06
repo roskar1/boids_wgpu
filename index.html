@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="utf-8">
+<title>Boids</title>
+<link href="style.css?v=3", rel="stylesheet">
+
+<style>
+html, body {
+	margin: 0;
+	height: 100%;
+}
+canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+</style>
+
+</head>
+<body>
+
+<div style="position: relative;">
+	
+	<canvas id="myCanvas" width="512" height="512" style="background-color: #000;"></canvas>
+	<p id="unique-paragraph">
+		Mouse X/Y Details
+	</p>
+
+	<p id="screen-log"></p>
+	<p id="screen-log-zoom"></p>
+</div>
+
+
+<!--
+<canvas width="512" height="512"></canvas>
+-->
+
+<script type="module" src="./main.js"></script>
+
+<!--
+<script type="module">
+
+	const kNumObjects = 1000000; //2100000
+	// WebGPU Setup
+	const canvas = document.querySelector("canvas");
+	if (!navigator.gpu) { throw new Error("WebGPU not supported."); console.log(1); }
+	const adapter = await navigator.gpu.requestAdapter();
+	if (!adapter) { throw new Error("No appropriate GPU adaptor found."); }
+	const device = await adapter.requestDevice();
+	const context = canvas.getContext("webgpu"); 
+	// Formats
+	const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
+	context.configure({ device: device, format: canvasFormat });
+
+	// Resize the canvas every time the window is resized
+	resizeCanvas(); // Initially resize canvas
+	window.addEventListener('resize', resizeCanvas);
+	
+	// Setup listener for logging any mouse movement
+	let screenLog = document.querySelector("#screen-log");
+	document.addEventListener("mousemove", onMouseMove);
+
+	// Set up listener for logging any mouse zooming.
+	let screenLogZoom = document.querySelector("#screen-log-zoom");
+	canvas.onwheel = zoom;
+
+	document.addEventListener("mousedown", onMouseDown);
+	document.addEventListener("mouseup", onMouseUp);
+
+	// Mouse position globals
+	let fMouseX = 0;
+	let fMouseY = 0;
+	let fMouseBeforeZoomX = 0;
+	let fMouseBeforeZoomY = 0;
+	let fMouseAfterZoomX = 0;
+	let fMouseAfterZoomY = 0;
+
+	let GPUX = 0;
+	let GPUY = 0;
+
+	let worldX = 0;
+	let worldY = 0;
+
+	let fStartPanX = 0;
+	let fStartPanY = 0;
+	let fOffsetX = 0;
+	let fOffsetY = 0;
+	// Mouse zoom globals
+	let scale = 1;
+	// World Pos Globals
+	let uintMax = 4294967295; // 32 bit int max
+	let sintMax = 2147483647;
+	let sintMin = -2147483648;
+	// Flags
+	let MOUSE_DOWN = false;
+
+	// Store some global variables for mouse position
+	//0: mouseX, 1: mouseY, 2: mouseZoom, 3: fOffsetX, 4: fOffsetY
+	let GPUMouse = new Float32Array(5);
+	GPUMouse[2] = scale;
+
+	// Create the Uniform Buffer for globals needed in shader stage
+	const uniformBuffer = device.createBuffer({
+		label: "Stored Mouse position and other details",
+		size: GPUMouse.byteLength,
+		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+	});
+
+	let worldToGPUX = (x) => (x / (canvas.width / 2)) / scale;
+	let worldToGPUY = (y) => (y / (canvas.height/ 2)) / scale;
+
+	function renderScreenText() {
+		screenLog.innerText = 
+		`Mouse Canvas Position X/Y: ${fMouseX}, ${fMouseY}
+		Mouse GPU Position X/Y: ${GPUX.toFixed(3)}, ${GPUY.toFixed(3)} 
+		Mouse World Position X/Y: ${worldX}, ${worldY}
+		Mouse Zoom: ${scale}
+		`;
+	}
+
+	function onMouseMove(e) {
+
+		fMouseX = e.clientX;
+		fMouseY = e.clientY;
+
+		GPUX = fMouseX / (canvas.width / 2);
+		GPUY = fMouseX / (canvas.height / 2);
+
+
+		// This is screen to GPU
+		//GPUX = 2.0 * (e.clientX / canvas.width) - 1.0;
+		//GPUY = -2.0 * (e.clientY / canvas.height) + 1.0;
+
+		// This is screen to world
+		worldX = Math.round(uintMax * (e.clientX / canvas.width) - sintMax);
+		worldY = Math.round(uintMax * (e.clientY / canvas.height) - sintMax);
+
+		GPUMouse[0] = GPUX;
+		GPUMouse[1] = GPUY;
+	}
+
+	function zoom(e) {
+	
+		// Capture before zoom mouse coordinates
+
+		fMouseBeforeZoomX = worldToGPUX(fMouseX);
+		fMouseBeforeZoomY = worldToGPUY(fMouseY);
+
+
+		e.preventDefault(); // Prevents default functionality
+		scale += e.deltaY * (-0.0001 * scale); // Smooth zoom
+
+		// Restrict Scale
+		scale = Math.min(Math.max(0.1, scale), 256);
+
+		// Update and pass scale into vertex shader
+		GPUMouse[2] = scale;
+
+		// Capture after zoom mouse coordinates
+
+		fMouseAfterZoomX = worldToGPUX(fMouseX);
+		fMouseAfterZoomY = worldToGPUY(fMouseY);
+
+		// Update offsets
+		fOffsetX += (fMouseAfterZoomX - fMouseBeforeZoomX);
+		fOffsetY -= (fMouseAfterZoomY - fMouseBeforeZoomY);
+
+		GPUMouse[3] = fOffsetX;
+		GPUMouse[4] = fOffsetY;
+
+		device.queue.writeBuffer(uniformBuffer, 0, GPUMouse);
+	}
+
+	function transmitSceneUniforms() {
+
+		//fOffsetX += ((fMouseX - fStartPanX) / (canvas.width / 2)) / scale;
+		// This is the client distance 
+		//fOffsetY -= ((fMouseY - fStartPanY) / (canvas.height / 2)) / scale;
+	
+		fOffsetX += worldToGPUX(fMouseX - fStartPanX);
+		fOffsetY -= worldToGPUY(fMouseY - fStartPanY);
+
+		GPUMouse[3] = fOffsetX;
+		GPUMouse[4] = fOffsetY;
+
+
+		// Update this for the next frame
+		fStartPanX = fMouseX;
+		fStartPanY = fMouseY;
+
+		device.queue.writeBuffer(uniformBuffer, 0, GPUMouse);
+	}
+
+
+	function onMouseDown(e) {
+		// When the mouse button is initially clicked, save start of pan
+		fStartPanX = fMouseX;
+		fStartPanY = fMouseY;	
+		MOUSE_DOWN = true;
+	}
+
+	function onMouseUp(e) {
+		MOUSE_DOWN = false;
+	}
+
+
+	// Function used to update the canvas size to fill the screen
+	function resizeCanvas() {
+		canvas.width = window.innerWidth;
+		canvas.height = window.innerHeight;
+	}
+
+
+
+
+
+
+//// Rand function ////////////////////////////////////////////////////////////
+
+	const rand = (min, max) => {
+		if (min === undefined) {
+			min = 0;
+			max = 1;
+		} else if (max === undefined) {
+			max = min;
+			min = 0;
+		}
+		return min + (Math.random() * (max - min));
+	};
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+	const WORKGROUP_SIZE = 256;
+
+
+///// NEW Program Layouts  ////////////////////////////////////////////////////
+
+	const computeBindGroupLayout = device.createBindGroupLayout({
+		label: "Compute Bind Group Layout",
+		entries: [{
+			binding: 0, // input position
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: { type: "read-only-storage" }
+		}, {
+			binding: 1, // output position
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: { type: "storage" }
+		}, {
+			binding: 2, // input velocity
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: { type: "read-only-storage" }
+		}, {
+			binding: 3, // output velocity
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: { type: "storage" }
+		}, {
+			binding: 4, // Mouse GPU Pos
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: {}
+		}, {
+			binding: 5, // Helper Buffer for cell data
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: { type: "storage" }
+		}, {
+			binding: 6,
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: { type: "storage" }
+		}]
+	});
+
+	const vertexBindGroupLayout = device.createBindGroupLayout({
+		label: "Vertex Bind Group Layout New",
+		entries: [{
+			binding: 0, // Positions
+			visibility: GPUShaderStage.VERTEX,
+			buffer: { type: "read-only-storage" }
+		}, {
+			binding: 1, // Velocities
+			visibility: GPUShaderStage.VERTEX,
+			buffer: { type: "read-only-storage" }
+		}, {
+			binding: 2, // Mouse Details
+			visibility: GPUShaderStage.VERTEX,
+			buffer: {}
+		}]
+	});
+
+	const vertexPipelineLayout = device.createPipelineLayout({
+		label: "Vertex Pipeline Layout",
+		bindGroupLayouts: [ vertexBindGroupLayout ],
+	});
+
+	const computePipelineLayout = device.createPipelineLayout({
+		label: "Compute Pipeline Layout",
+		bindGroupLayouts: [ computeBindGroupLayout ],
+		
+	});
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+//// VERTEX BUFFER DEFINITION /////////////////////////////////////////////////
+	/*
+	const vertices = new Float32Array([
+		 0.1,  0.0,
+		-0.1,  0.05,
+		-0.1, -0.05,
+	]);
+	*/
+	const vertices = new Float32Array([
+		 1,  0.0,
+		-1,  0.5,
+		-1, -0.5,
+	]);
+	
+	const vertexBuffer = device.createBuffer({
+		label: "Cell Vertices",
+		size: vertices.byteLength,
+		usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+	});
+	device.queue.writeBuffer(vertexBuffer, 0, vertices); //location 0
+	
+	const vertexBufferLayout = {
+		arrayStride: 8,
+		attributes: [{
+			format: "float32x2",
+			offset: 0,
+			shaderLocation: 0,
+		}],
+	};
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+//// Vertex/Fragment Shader ///////////////////////////////////////////////////
+
+	const triShaderModule = device.createShaderModule({
+		label: "Hardcoded Triangle Shader",
+		code: `
+
+		const UINTMAX : f32 = 4294967295;
+
+		struct VertexInput {
+			@builtin(instance_index) instanceIndex: u32,
+			@location(0) pos: vec2f,
+		};
+
+		struct VertexInputSmall {
+			@builtin(instance_index) instanceIndex: u32,
+			@location(0) pos: vec2f
+		};
+
+		struct VertexOutput {
+			@builtin(position) position: vec4f,
+			@location(0) color: vec4f,
+		};
+
+		struct sceneUniforms {
+			mouseX : f32,
+			mouseY : f32,
+			zoom : f32,
+			offsetX : f32,
+			offsetY : f32,
+		};
+
+
+		// vec2f
+		@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
+		@group(0) @binding(1) var<storage, read> velocities: array<vec2f>;
+		@group(0) @binding(2) var<uniform> SceneUniforms: sceneUniforms;
+
+		@vertex
+		fn vertexMain(input: VertexInput) -> VertexOutput {
+
+			let position : vec2f = worldToScreen(positions[input.instanceIndex]);
+			let velocity : vec2f = velocities[input.instanceIndex];
+
+			// Get the direction of the velocity vector and construct rotation matrix
+			// The magnitude of the velocity does not matter
+			let theta = atan2(velocity.y, velocity.x);
+			let c = cos(theta);
+			let s = sin(theta);
+
+
+			//Rotation matrix
+			let rotate = mat2x2f(vec2f(c, s), vec2f(-s, c));
+
+			// Offset is already negative or positive correctly based on right/left
+			var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
+
+			/*
+			var color = array<vec4f, 3>(
+				vec4f(1, 0, 0, 1),
+				vec4f(0, 1, 0, 1),
+				vec4f(0, 0, 1, 1),
+			);
+			*/
+			
+			var vsOutput: VertexOutput;
+
+			vsOutput.position = vec4f
+			(
+				((rotate * input.pos / 1000) + (position + panVector)) * SceneUniforms.zoom,
+				0.0, 
+				1.0
+			);
+
+			//vsOutput.color = color[input.vertexIndex];
+			return vsOutput;
+		}
+
+		fn worldToScreen(v : vec2u) -> vec2f {
+			// When casting a u32 vector to a f32 vector, it must be explcit componentwise
+			let new_vector : vec2f = vec2f(f32(v.x), f32(v.y));
+
+			// returns a float vector between -1 and 1
+			return (new_vector / (UINTMAX / 2.0)) - 1.0;
+		}
+
+
+		@vertex
+		fn vertexMainSmall(input: VertexInputSmall) -> VertexOutput {
+
+			var panVector = vec2f
+			( 
+				input.pos.x + SceneUniforms.offsetX,
+				input.pos.y + SceneUniforms.offsetY 
+			);
+
+			var vsOutput:  VertexOutput;
+
+			vsOutput.position = vec4f(0.0);
+			vsOutput.color = vec4f(1, 1, 1, 1);
+
+			return vsOutput;
+		}
+
+
+		@fragment
+		fn fragmentMain(fsInput: VertexOutput) -> @location(0) vec4f {
+			return vec4f(1.0, 1.0, 1.0, 1.0);
+			//return fsInput.color;
+		}	
+		`
+	});
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+////// Vertex/Fragment Pipeline ///////////////////////////////////////////////
+
+	const vertexPipeline = device.createRenderPipeline({
+		label: "Vertex Pipeline",
+		layout: vertexPipelineLayout,
+		vertex: {
+			module: triShaderModule,
+			entryPoint: "vertexMain",
+			buffers: [vertexBufferLayout]
+		},
+		fragment: {
+			module: triShaderModule,
+			entryPoint: "fragmentMain",
+			targets: [{
+				format: canvasFormat
+			}],
+		},
+		multisample: {
+			count: 4,
+		},
+	});
+
+
+
+
+
+/////////////////////Initial Data Filling ////////////////////////////////////
+	// The size of each array is 2 * numBoids thus,
+	const size = kNumObjects * 2; // 2 * 4
+
+	// New Datatype
+	const initialPositions = new Uint32Array(size);
+
+	const positionStorageBuffers = [
+		device.createBuffer({
+			label: "Position Buffer A",
+			size: initialPositions.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage. COPY_DST,
+		}), 
+		device.createBuffer({
+			label: "Position Buffer B",
+			size: initialPositions.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage. COPY_DST,
+		})
+	];
+
+	for (let i = 0; i < size; ++i) {
+		//initialPositions[i] = rand(0, 2000.0);
+
+		initialPositions[i] = rand(0, uintMax);
+	}
+	
+	device.queue.writeBuffer(positionStorageBuffers[0], 0, initialPositions);
+
+	// Initialize Velocities
+	const initialVelocities = new Float32Array(kNumObjects * 2);
+
+	const velocityStorageBuffers = [
+		device.createBuffer({
+			label: "Velocity Buffer A",
+			size: initialVelocities.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		}), 
+		device.createBuffer({
+			label: "Velocity Buffer B",
+			size: initialVelocities.byteLength,
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+		})
+	];
+
+	for (let i = 0; i < size; ++i) {
+		//initialVelocities[i] = rand(-0.001, 0.001);
+
+		// New Datatype velocities needs to be large considering the random generation
+		initialVelocities[i] = rand(-1, 1);
+	}
+
+	device.queue.writeBuffer(velocityStorageBuffers[0], 0, initialVelocities);
+
+
+	// Helper Buffers for compute stage
+	const cellIndices = new Uint32Array(size);
+
+
+	const cellIndicesHelperBuffer = device.createBuffer({
+		label: "Helper Buffer to store cell indices for each boid",
+		size: cellIndices.byteLength,
+		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+	});
+		
+	device.queue.writeBuffer(cellIndicesHelperBuffer, 0, cellIndices);
+
+
+	// helper buffer for sorting the boids
+	// contains vec4 of 32 bit items
+	const cellContents = new Uint32Array(size * 2);
+
+
+	const cellContentsHelperBuffer = device.createBuffer({
+		label: "Helper Buffer to store cell contents for each cell",
+		size: cellContents.byteLength,
+		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+	});
+
+
+	device.queue.writeBuffer(cellContentsHelperBuffer, 0, cellContents);
+
+
+
+
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+	const computeBindGroups = [
+		device.createBindGroup({
+			label: "Compute bind group A",
+			layout: computeBindGroupLayout,
+			entries: [{
+				binding: 0,
+				resource: { buffer: positionStorageBuffers[0] }
+			}, {
+				binding: 1,
+				resource: { buffer: positionStorageBuffers[1] }
+			}, {
+				binding: 2,
+				resource: { buffer: velocityStorageBuffers[0] }
+			}, {
+				binding: 3,
+				resource: { buffer: velocityStorageBuffers[1] }
+			}, {
+				binding: 4,
+				resource: { buffer: uniformBuffer } 
+			}, {
+				binding: 5,
+				resource: { buffer: cellIndicesHelperBuffer }
+			}, {
+				binding: 6,
+				resource: { buffer: cellContentsHelperBuffer }
+			}],
+		}),
+		device.createBindGroup({
+			label: "Compute bind group B",
+			layout: computeBindGroupLayout,
+			entries: [{
+				binding: 0,
+				resource: { buffer: positionStorageBuffers[1] }
+			}, {
+				binding: 1,
+				resource: { buffer: positionStorageBuffers[0] }
+			}, {
+				binding: 2,
+				resource: { buffer: velocityStorageBuffers[1] }
+			}, {
+				binding: 3,
+				resource: { buffer: velocityStorageBuffers[0] }
+			}, {
+				binding: 4,
+				resource: { buffer: uniformBuffer }
+			}, {
+				binding: 5,
+				resource: { buffer: cellIndicesHelperBuffer }
+			}, {
+				binding: 6,
+				resource: { buffer: cellContentsHelperBuffer }
+			}],
+		}),
+	];
+
+	const vertexBindGroups = [
+		device.createBindGroup({
+			label: "Vertex Bind Group A",
+			layout: vertexBindGroupLayout,
+			entries: [{
+				binding: 0,
+				resource: { buffer: positionStorageBuffers[0] }
+			}, {
+				binding: 1,
+				resource: { buffer: velocityStorageBuffers[0] }
+			}, {
+				binding: 2,
+				resource: { buffer: uniformBuffer }
+			}],
+		}), 
+		device.createBindGroup({
+			label: "Vertex Bind Group B", 
+			layout: vertexBindGroupLayout,
+			entries: [{
+				binding: 0,
+				resource: { buffer: positionStorageBuffers[1] }
+			}, {
+				binding: 1,
+				resource: { buffer: velocityStorageBuffers[1] }
+			}, {
+				binding: 2,
+				resource: { buffer: uniformBuffer }
+			}],
+		})
+	];
+
+
+
+
+
+/* UNCOMMENT FOR RECENT
+	const computeBindGroup = device.createBindGroup({
+		label: "Compute bind group for positions and velocities",
+		layout: computeBindGroupLayout,
+		entries: [{
+			binding: 0,
+			resource: positionStorageBuffer
+		}, {
+			binding: 1,
+			resource: velocityStorageBuffer
+		}]
+	});
+
+
+	const vertexBindGroup = device.createBindGroup({
+		label: "Vertex bind group for positions",
+		layout: vertexBindGroupLayout,
+		entries: [{
+			binding: 0,
+			resource: positionStorageBuffer
+		}]
+	});
+*/ 
+
+
+
+
+
+//// Compute Shader Buffer ////////////////////////////////////////////////////
+	/*
+	const input = new Float32Array([1, 3, 5]);
+
+	// Create a buffer on the GPU to hold Compute Shader data
+	const workBuffer = device.createBuffer({
+		label: "work Buffer",
+		size: input.byteLength,
+		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+	});
+	device.queue.writeBuffer(workBuffer, 0, input);
+
+
+	// Mapped Buffer - this is how we will be able to view the results of the 
+	// Compute shader computation
+	const resultBuffer = device.createBuffer({
+		label: "Results Buffer",
+		size: input.byteLength,
+		usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+	});
+	*/
+///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+//// Compute Shader ///////////////////////////////////////////////////////////
+
+	const computeModule = device.createShaderModule({
+		label: "Compute Shader",
+		code: `
+			struct computeInput {
+				@builtin(global_invocation_id) id: vec3u,
+			};
+			
+			struct sceneUniforms {
+				mouseX : f32,
+				mouseY : f32,
+				zoom : f32,
+				offsetX : f32,
+				offsetY : f32,
+			};
+
+			struct Boid {
+				x : u32,
+				y : u32,
+				xv : f32,
+				yv : f32,
+			};
+
+			struct cellIndexHelperStruct {
+				cell : u32,
+				indexWithinCell : u32,
+			};
+
+			struct cellStorageHelperStruct {
+				cellStartIndex : u32,
+				cellEndIndex : u32,
+				count : u32,
+			};
+
+			struct cellContents { //Dynamically sized arrays must be at the end of structs in wgsl
+				// count : u32,
+				particles: array<Boid>,
+			};
+
+			// Temporary grid size
+			const gridEdgeCount = 16;
+			const totalCellCount = gridEdgeCount * gridEdgeCount;
+
+
+			// So these can be workgroup buffers
+			//var<storage, read_write> cellCounters: array<u32, totalCellCount>;
+			//var<storage, read_write> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
+
+			var<workgroup> cellCounters: array<atomic<u32>, totalCellCount>;
+			var<workgroup> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
+
+			// There a entries in this array equal to the total amount of cells. 
+			// In each entry there is a dynamically sized array. The sum of 
+			// the sizes of these arrays is equal to the number of objects.
+
+			// This must be a storage buffer
+			// Use offsets to 
+			//var<storage, read_write> cellContentsArray: array<cellContents, totalCellCount>;
+
+		
+			// vec2f
+			@group(0) @binding(0) var<storage, read> inputPositions: array<vec2u>;
+			@group(0) @binding(1) var<storage, read_write> outputPositions: array<vec2u>;
+
+			@group(0) @binding(2) var<storage, read> inputVelocities: array<vec2f>;
+			@group(0) @binding(3) var<storage, read_write> outputVelocities: array<vec2f>;
+
+
+
+			// vec4 implementation  - do this later
+			// @group(0) @binding(0) var<storage, read> inputParticles: array<Boid>;
+			// @group(0) @binding(1) var<storage, read_write> outputParticles: array<Boid>;
+
+
+			@group(0) @binding(4) var<uniform> SceneUniforms: sceneUniforms;
+			@group(0) @binding(5) var<storage, read_write> cellIndices: array<cellIndexHelperStruct>;
+			@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
+
+
+			@compute
+			@workgroup_size(${WORKGROUP_SIZE}, 1, 1) // 1D workgroup
+			fn computeMain(input: computeInput) {
+				// All this does is update positions by a constant factor
+				let i = input.id.x;
+				outputPositions[i] = vec2u(vec2f(inputPositions[i]) + inputVelocities[i]);
+
+
+				// Update Velocities to point towards mouse
+				outputVelocities[i] = vec2f(
+					(SceneUniforms.mouseX - f32(inputPositions[i].x)) / 10000.0, 
+					(SceneUniforms.mouseY - f32(inputPositions[i].y)) / 10000.0
+				);
+			}
+			
+			// Do this once per boid
+			@compute
+			@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
+			fn count(input: computeInput) {
+				let i = input.id.x;
+				let cell = getCell(inputPositions[i]);
+
+				cellIndices[i].cell = cell;
+				cellIndices[i].indexWithinCell = atomicLoad(&cellCounters[cell]);
+				atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
+			}
+
+			// Do this once per cell
+			// If workgroup size is the number of cells this could work
+			@compute
+			@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
+			fn alloc(input: computeInput) {
+				let i = input.id.x;
+				var prefixSum: u32 = 0u;
+				// The variable i here represents the cell id and not the boid
+				let cellCount = atomicLoad(&cellCounters[i]);
+
+				cellStorage[i].cellStartIndex = prefixSum;
+				cellStorage[i].cellEndIndex = prefixSum + cellCount;
+				cellStorage[i].count = cellCount;
+				prefixSum += cellCount;
+			}
+
+			// Do this once per boid
+			@compute
+			@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
+			fn fill(input: computeInput) {
+				let i = input.id.x;
+				let cell = getCell(inputPositions[i]);
+				let offset = cellStorage[cell].cellStartIndex + cellIndices[i].indexWithinCell;
+
+				cellContentsArray[offset] = 
+					Boid(
+						inputPositions[i].x,
+						inputPositions[i].y,
+						inputVelocities[i].x,
+						inputVelocities[i].y
+					);
+			}
+
+			fn getCell(v: vec2u) -> u32 {
+				let xPosition = v.x;
+				let yPosition = v.y;
+
+				// Use only log safe values for this
+				let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
+				let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
+
+				return xCell + (yCell * gridEdgeCount);
+			}	
+
+
+
+
+
+
+
+
+			fn rand_sine(p: vec2f) -> f32 {
+				return fract(sin(dot(p, vec2f(12.9898, 4.1414))) * 43758.5453);
+			}
+		`
+	});
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+////// Compute Shader Pipeline ////////////////////////////////////////////////
+
+	const computePipeline = device.createComputePipeline({
+		label: "Compute Shader Pipeline",
+		layout: computePipelineLayout,
+		compute: {
+			module: computeModule,
+			entryPoint: "computeMain",
+		},
+	});
+
+///////////////////////////////////////////////////////////////////////////////
+
+	const renderPassDescriptor = {
+		label: "Canvas renderPass",
+		colorAttachments: [{
+			clearValue: [0, 0, 0, 1],
+			loadOp: "clear",
+			storeOp: "store",
+		}],
+	};
+
+//////////////////////////////////////////////////////////////////////////////
+
+	// Render pipeline Global Variables
+	let step = 0;
+	let multisampleTexture;
+
+
+
+	// Render Function
+
+	function render() {
+
+		// Anti-aliasing Stuff
+		// Grab the current texture from the canvas
+		const canvasTexture = context.getCurrentTexture();
+
+		// If the multisample texture doesn't exist or is the wrong size, then make]
+		// a new one
+		if (!multisampleTexture ||
+			multisampleTexture.width !== canvasTexture.width ||
+			multisampleTexture.height !== canvasTexture.height) {
+
+			// If we have an existing multisample texture, destroy it.
+			if (multisampleTexture) {
+				multisampleTexture.destroy();
+			}
+
+			// Create a new multisample texture that matches canvas size
+			multisampleTexture = device.createTexture({
+				format: canvasTexture.format,
+				usage: GPUTextureUsage.RENDER_ATTACHMENT,
+				size: [canvasTexture.width, canvasTexture.height],
+				sampleCount: 4,
+			});
+		}
+
+		renderPassDescriptor.colorAttachments[0].view = 
+			multisampleTexture.createView();
+
+		renderPassDescriptor.colorAttachments[0].resolveTarget = 
+			canvasTexture.createView();
+
+
+		// Normal Render Stuff
+		const encoder = device.createCommandEncoder();
+		
+		const pass = encoder.beginRenderPass(renderPassDescriptor);
+
+		pass.setPipeline(vertexPipeline);
+		pass.setBindGroup(0, vertexBindGroups[step % 2]);
+		pass.setVertexBuffer(0, vertexBuffer);
+		pass.draw(3, kNumObjects);
+
+		pass.end();
+		
+		device.queue.submit([encoder.finish()]);
+	}
+
+	function renderSmall() {
+		
+		const encoder = device.createCommandEncoder();
+		
+		const pass = encoder.beginRenderPass({
+			label: "Small render pass",
+			colorAttachments: [{
+				view: context.getCurrentTexture().createView(),
+				loadOp: "clear",
+				clearValue: { r: 0, g: 0, b: 0, a: 1 },
+				storeOp: "store",
+			}],
+		});
+
+		pass.setPipeline(vertexSmallPipeline);
+		pass.setBindGroup(0, vertexBindGroups[step % 2]);
+		pass.setVertexBuffer(0, vertexBuffer);
+		pass.draw(1, kNumObjects);
+
+		pass.end();
+		
+		device.queue.submit([encoder.finish()]);
+	}
+
+	// A separate  compute function for the compute shader
+	function compute() {
+		const encoder = device.createCommandEncoder({
+			label: "Compute Encoder",
+		});
+		const pass = encoder.beginComputePass({
+			label: "Compute Pass",
+		});
+		pass.setPipeline(computePipeline);
+		// pass.setBindGroup(0, computeBindGroup);
+		pass.setBindGroup(0, computeBindGroups[step % 2]);
+		const workGroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
+
+		pass.dispatchWorkgroups(workGroupCount);
+		pass.end();
+
+		device.queue.submit([encoder.finish()]);
+	}
+
+	// This is known as a resizeObserver
+	// We create this object to ensure no matter how large objects are on the
+	// screen we maintain fine-grain detail. More details can be found at: 
+	// https://webgpufundamentals.org/webgpu/lessons/webgpu-resizing-the-canvas.html
+	/*
+	const observer = new ResizeObserver(entries => {
+		for (const entry of entries) {
+
+	*/
+
+	function renderLoop(timestamp) {
+		requestAnimationFrame(renderLoop);
+		if (MOUSE_DOWN) {
+			transmitSceneUniforms();
+		}
+		renderScreenText();
+		compute();
+		render();
+	}
+
+	requestAnimationFrame(renderLoop);
+
+</script>
+-->
+</body>
+</html>
+

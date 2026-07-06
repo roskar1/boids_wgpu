@@ -1,0 +1,37 @@
+
+#unique-paragraph {
+	position: absolute;
+	top: 20px;
+	left: 20px;
+	color: #fff;
+	background: rgba(0, 0, 0, 1.0);
+	margin: 0;
+	padding: 0px;
+	pointer-events: none;
+}
+
+
+
+#screen-log {
+	position: absolute;
+	top: 37px;
+	left: 20px;
+	color: #fff;
+	background: rgba(0, 0, 0, 1.0);
+	margin: 0;
+	padding: 0px;
+	pointer-events: none;
+}
+
+
+
+#screen-log-zoom {
+	position: absolute;
+	top: 111px;
+	left: 20px;
+	color: #fa0;
+	background: rgba(0, 0, 0, 1.0);
+	margin: 0;
+	padding: 0px;
+	pointer-events: none;
+}

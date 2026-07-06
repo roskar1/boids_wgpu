@@ -1,0 +1,111 @@
+// gpu/vertexShader.wgsl.js
+
+export const VERTEX_SHADER_CODE =
+`
+	const UINTMAX : f32 = 4294967295;
+
+	struct VertexInput {
+		@builtin(instance_index) instanceIndex: u32,
+		@builtin(vertex_index) vertexIndex: u32,
+		@location(0) pos: vec2f,
+	};
+
+	struct VertexInputSmall {
+		@builtin(instance_index) instanceIndex: u32,
+		@location(0) pos: vec2f
+	};
+
+	struct VertexOutput {
+		@builtin(position) position: vec4f,
+		@location(0) color: vec4f,
+	};
+
+	struct sceneUniforms {
+		mouseX : f32,
+		mouseY : f32,
+		zoom : f32,
+		offsetX : f32,
+		offsetY : f32,
+	};
+
+
+	// vec2f
+	@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
+	@group(0) @binding(1) var<storage, read> velocities: array<vec2f>;
+	@group(0) @binding(2) var<uniform> SceneUniforms: sceneUniforms;
+
+	@vertex
+	fn vertexMain(input: VertexInput) -> VertexOutput {
+
+		let position : vec2f = worldToScreen(positions[input.instanceIndex]);
+		let velocity : vec2f = velocities[input.instanceIndex];
+
+		// Get the direction of the velocity vector and construct rotation matrix
+		// The magnitude of the velocity does not matter
+		let theta = atan2(velocity.y, velocity.x);
+		let c = cos(theta);
+		let s = sin(theta);
+
+
+		//Rotation matrix
+		let rotate = mat2x2f(vec2f(c, s), vec2f(-s, c));
+
+		// Offset is already negative or positive correctly based on right/left
+		var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
+
+		// color
+		///*
+		var color = array<vec4f, 3>(
+			vec4f(1, 0, 0, 1),
+			vec4f(0, 1, 0, 1),
+			vec4f(0, 0, 1, 1),
+		);
+		//*/
+			
+		var vsOutput: VertexOutput;
+
+		vsOutput.position = vec4f
+		(
+			((rotate * input.pos / 1000) + (position + panVector)) * SceneUniforms.zoom,
+			0.0, 
+			1.0
+		);
+
+		// Color
+		vsOutput.color = color[input.vertexIndex];
+
+		return vsOutput;
+	}
+
+	fn worldToScreen(v : vec2u) -> vec2f {
+		// When casting a u32 vector to a f32 vector, it must be explcit componentwise
+		let new_vector : vec2f = vec2f(f32(v.x), f32(v.y));
+
+		// returns a float vector between -1 and 1
+		return (new_vector / (UINTMAX / 2.0)) - 1.0;
+	}
+
+
+	@vertex
+	fn vertexMainSmall(input: VertexInputSmall) -> VertexOutput {
+		var panVector = vec2f
+		( 
+			input.pos.x + SceneUniforms.offsetX,
+			input.pos.y + SceneUniforms.offsetY 
+		);
+
+		var vsOutput:  VertexOutput;
+
+		vsOutput.position = vec4f(0.0);
+		vsOutput.color = vec4f(1, 1, 1, 1);
+		return vsOutput;
+	}
+
+
+	@fragment
+	fn fragmentMain(fsInput: VertexOutput) -> @location(0) vec4f {
+		//return vec4f(1.0, 1.0, 1.0, 1.0);
+		// Color
+		return fsInput.color;
+	}	
+`;
