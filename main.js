@@ -17,8 +17,6 @@ async function init() {
 		console.log("0. Configuring canvas...");
 
 		canvas = document.querySelector("#myCanvas");
-		console.log("Canvas element found:", canvas); 
-		console.log("DOM State:", document.readyState);
 
 		if (!navigator.gpu) { 
 			throw new Error("WebGPU not supported."); 
@@ -26,13 +24,11 @@ async function init() {
 		}
 
 		console.log("1. Configuring device and adapter...");
-		////////// Promise ////////////////////////////////////////////////////
 
 		const adapter = await navigator.gpu.requestAdapter();
 		if (!adapter) {
 			throw new Error("No appropriate GPU adapter found.");
 		}
-		///////// Promise /////////////////////////////////////////////////////
 		device = await adapter.requestDevice();
 
 		context = canvas.getContext("webgpu"); 
@@ -41,10 +37,8 @@ async function init() {
 		canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 		context.configure({ device: device, format: canvasFormat });
 
-
 		console.log("2. Configuring event listeners...");
-
-		// GPU Error listenener
+		// GPU Error listener
 		device.addEventListener('uncapturederror', (event) => {
 			console.error('A WebGPU error occurred:', event.error.message);
 		});		
@@ -472,7 +466,7 @@ function initData() {
 
 	for (let i = 0; i < size; ++i) {
 		// New Datatype velocities needs to be large considering the random generation
-		initialVelocities[i] = rand(-1, 1);
+		initialVelocities[i] = rand(-100, 100);
 	}
 
 	device.queue.writeBuffer(velocityStorageBuffers[0], 0, initialVelocities);
@@ -617,10 +611,22 @@ let multisampleTexture;
 
 
 //-----------------------------------------------------------------------------
-// Render
+// Combined Render and Compute
 //-----------------------------------------------------------------------------
-function render() {
+function frame() {
 
+	// Compute
+	const encoder = device.createCommandEncoder();
+	const computePass = encoder.beginComputePass();
+	computePass.setPipeline(computePipeline);
+	computePass.setBindGroup(0, computeBindGroups[step % 2]);
+	const workgroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
+	computePass.dispatchWorkgroups(workgroupCount);
+	computePass.end();
+
+	step++;
+
+	// Render
 	// Anti-aliasing Stuff
 	// Grab the current texture from the canvas
 	const canvasTexture = context.getCurrentTexture();
@@ -650,44 +656,17 @@ function render() {
 
 	renderPassDescriptor.colorAttachments[0].resolveTarget = 
 		canvasTexture.createView();
+	const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+	renderPass.setPipeline(vertexPipeline);
+	renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+	renderPass.setVertexBuffer(0, vertexBuffer);
+	renderPass.draw(3, kNumObjects);
 
-
-	// Normal Render Stuff
-	const encoder = device.createCommandEncoder();
-		
-	const pass = encoder.beginRenderPass(renderPassDescriptor);
-
-	pass.setPipeline(vertexPipeline);
-	pass.setBindGroup(0, vertexBindGroups[step % 2]);
-	pass.setVertexBuffer(0, vertexBuffer);
-	pass.draw(3, kNumObjects);
-
-	pass.end();
-		
-	device.queue.submit([encoder.finish()]);
-}
-
-
-//-----------------------------------------------------------------------------
-// Compute
-//-----------------------------------------------------------------------------
-function compute() {
-	const encoder = device.createCommandEncoder({
-		label: "Compute Encoder",
-	});
-	const pass = encoder.beginComputePass({
-		label: "Compute Pass",
-	});
-	pass.setPipeline(computePipeline);
-	// pass.setBindGroup(0, computeBindGroup);
-	pass.setBindGroup(0, computeBindGroups[step % 2]);
-	const workGroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
-	
-	pass.dispatchWorkgroups(workGroupCount);
-	pass.end();
+	renderPass.end()
 
 	device.queue.submit([encoder.finish()]);
 }
+
 
 
 //-----------------------------------------------------------------------------
@@ -704,9 +683,8 @@ function renderLoop(timestamp) {
 
 	renderScreenText();
 
-	compute();
-	render();
-	step++;
+	frame();
+	//console.log(`Step: ${step}`);
 }
 
 

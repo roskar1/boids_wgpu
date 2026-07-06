@@ -69,7 +69,7 @@ export const COMPUTE_SHADER_CODE =
 	@group(0) @binding(3) var<storage, read_write> outputVelocities: array<vec2f>;
 
 
-	// vec4 implementation  - do this later
+	// vec4 implementation - optimal size for registers
 	// @group(0) @binding(0) var<storage, read> inputParticles: array<Boid>;
 	// @group(0) @binding(1) var<storage, read_write> outputParticles: array<Boid>;
 
@@ -88,6 +88,7 @@ export const COMPUTE_SHADER_CODE =
 
 		//outputPositions[i] = vec2u(inputPositions[i] + 1);
 
+		outputVelocities[i] = inputVelocities[i];
 
 		// Update Velocities to point towards mouse
 		//outputVelocities[i] = vec2f(
