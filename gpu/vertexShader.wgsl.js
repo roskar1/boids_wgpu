@@ -10,11 +10,6 @@ export const VERTEX_SHADER_CODE =
 		@location(0) pos: vec2f,
 	};
 
-	struct VertexInputSmall {
-		@builtin(instance_index) instanceIndex: u32,
-		@location(0) pos: vec2f
-	};
-
 	struct VertexOutput {
 		@builtin(position) position: vec4f,
 		@location(0) color: vec4f,
@@ -42,6 +37,12 @@ export const VERTEX_SHADER_CODE =
 
 		// Get the direction of the velocity vector and construct rotation matrix
 		// The magnitude of the velocity does not matter
+
+		// Normalized Velocity
+		var u : vec2f = normalize(velocity);
+		let rotate : mat2x2f = mat2x2f(-u.y, u.x, -u.x, -u.y);
+
+		/*
 		let theta = atan2(velocity.y, velocity.x);
 		let c = cos(theta);
 		let s = sin(theta);
@@ -49,18 +50,20 @@ export const VERTEX_SHADER_CODE =
 
 		//Rotation matrix
 		let rotate = mat2x2f(vec2f(c, s), vec2f(-s, c));
+	
+		*/
 
 		// Offset is already negative or positive correctly based on right/left
 		var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
 
 		// color
-		///*
+		/*
 		var color = array<vec4f, 3>(
 			vec4f(1, 0, 0, 1),
 			vec4f(0, 1, 0, 1),
 			vec4f(0, 0, 1, 1),
 		);
-		//*/
+		*/
 			
 		var vsOutput: VertexOutput;
 
@@ -72,7 +75,7 @@ export const VERTEX_SHADER_CODE =
 		);
 
 		// Color
-		vsOutput.color = color[input.vertexIndex];
+		//vsOutput.color = color[input.vertexIndex];
 
 		return vsOutput;
 	}
@@ -85,27 +88,10 @@ export const VERTEX_SHADER_CODE =
 		return (new_vector / (UINTMAX / 2.0)) - 1.0;
 	}
 
-
-	@vertex
-	fn vertexMainSmall(input: VertexInputSmall) -> VertexOutput {
-		var panVector = vec2f
-		( 
-			input.pos.x + SceneUniforms.offsetX,
-			input.pos.y + SceneUniforms.offsetY 
-		);
-
-		var vsOutput:  VertexOutput;
-
-		vsOutput.position = vec4f(0.0);
-		vsOutput.color = vec4f(1, 1, 1, 1);
-		return vsOutput;
-	}
-
-
 	@fragment
 	fn fragmentMain(fsInput: VertexOutput) -> @location(0) vec4f {
-		//return vec4f(1.0, 1.0, 1.0, 1.0);
+		return vec4f(1.0, 1.0, 1.0, 1.0);
 		// Color
-		return fsInput.color;
+		//return fsInput.color;
 	}	
 `;
