@@ -1,9 +1,9 @@
 // main.js
 
 // Top-level mandated imports
-import { VERTEX_SHADER_CODE } from './gpu/vertexShader.wgsl.js?v=2';
+import { VERTEX_SHADER_CODE } from './gpu/vertexShader.wgsl.js';
 import { COMPUTE_SHADER_CODE } from './gpu/computeShader.wgsl.js';
-
+import { WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 
 // Rolling average implemented as a fixed-size array circular buffer
 class NonNegativeRollingAverage {
@@ -97,8 +97,8 @@ async function main() {
 	//-----------------------------------------------------------------------------
 
 	// Simulation globals
-	const kNumObjects = 3000000; //2100000
-	const WORKGROUP_SIZE = 256;
+	const kNumObjects = 1000000; //2100000
+	//const WORKGROUP_SIZE = 256;
 
 	// Mouse position globals
 	let fMouseX = 0;
@@ -150,12 +150,13 @@ async function main() {
 
 
 	// gputime variable is returned in nanoseconds. Dived by 1000 to get
-	// microseconds, and 10000 for miliseconds
+	// microseconds, and 1000000 for miliseconds
 	function renderScreenText() {
 		screenLog.innerText = 
 		`gpu ${canTimestamp ? `${gpuAverage.get().toFixed(1)} ms (${(1 / (gpuAverage.get() / 1000)).toFixed(0)} fps)` : 'N/A'} 
-		\t update\t ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
-		\t render\t ${canTimestamp ? `${vertexAverage.get().toFixed(1)} ms` : 'N/A'} 
+		update ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
+		render ${canTimestamp ? `${vertexAverage.get().toFixed(1)} ms` : 'N/A'} 
+		zoom ${scale}
 		`;
 	}
 	// map mouse to [0, 2]
@@ -308,6 +309,7 @@ async function main() {
 	let vertexBindGroupLayout;
 	let vertexBuffer;
 	let vertexPipeline;
+	let multisampleCount = 4;
 	
 
 	// Layouts
@@ -346,7 +348,7 @@ async function main() {
 		usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
 	});
 	device.queue.writeBuffer(vertexBuffer, 0, vertices); //location 0
-	
+
 	const vertexBufferLayout = {
 		arrayStride: 8,
 		attributes: [{
@@ -377,11 +379,43 @@ async function main() {
 			}],
 		},
 		multisample: {
-			count: 4,
+			count: multisampleCount,
+		},
+		primitive: {
+			topology: "triangle-list",
 		},
 	});
 
-	
+
+	// No vertex buffer
+	// point-list topology
+	// Use this after 0.9 zoom
+	const vertexPipelineSmall = device.createRenderPipeline({
+		label: "Vertex Pipeline",
+		layout: vertexPipelineLayout,
+		vertex: {
+			module: vertexModule,
+			entryPoint: "vertexMainSmall",
+			//buffers: [vertexBufferLayout]
+		},
+		fragment: {
+			module: vertexModule,
+			entryPoint: "fragmentMain",
+			targets: [{
+				format: canvasFormat
+			}],
+		},
+		multisample: {
+			count: multisampleCount,
+		},
+		primitive: {
+			topology: "point-list",
+		},
+	});
+
+
+
+
 
 	//-------------------------------------------------------------------------
 	// Init Compute
@@ -441,7 +475,7 @@ async function main() {
 		layout: computePipelineLayout,
 		compute: {
 			module: computeModule,
-			entryPoint: "computeMain",
+			entryPoint: "computeMainFloat32",
 		},
 	});
 
@@ -451,13 +485,20 @@ async function main() {
 
 	let vertexBindGroups;
 	let computeBindGroups;
+	const S_INT_MAX = 2147483647;
+	const U_INT_MAX = 4294967295;
+
 
 	
 	// The size of each array is 2 * numBoids thus,
 	const size = kNumObjects * 2; // 2 * 4
 
 	// New Datatype
+	//const initialPositions = new Uint32Array(size);
 	const initialPositions = new Uint32Array(size);
+	const initialVelocities = new Float32Array(size);
+
+
 
 	const positionStorageBuffers = [
 		device.createBuffer({
@@ -472,14 +513,15 @@ async function main() {
 		})
 	];
 
-	for	(let i = 0; i < size; ++i) {
-		initialPositions[i] = rand(0, uintMax);
-	}
+	//for (let i = 0; i < size; ++i) { initialPositions[i] = rand(0, uintMax); }
 	
+	for	(let i = 0; i < size; ++i) { initialPositions[i] = rand(0, U_INT_MAX); }
+
 	device.queue.writeBuffer(positionStorageBuffers[0], 0, initialPositions);
 
-	// Initialize Velocities
-	const initialVelocities = new Float32Array(kNumObjects * 2);
+
+
+	// Velocity
 
 	const velocityStorageBuffers = [
 		device.createBuffer({
@@ -494,11 +536,10 @@ async function main() {
 		})
 	];
 
-	for (let i = 0; i < size; ++i) {
-		// New Datatype velocities needs to be large considering the random generation
-		initialVelocities[i] = rand(-100000, 100000);
-	}
+	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000, 100000); }
 
+	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000.0, 100000.0); }
+	
 	device.queue.writeBuffer(velocityStorageBuffers[0], 0, initialVelocities);
 
 
@@ -696,7 +737,7 @@ async function main() {
 				format: canvasTexture.format,
 				usage: GPUTextureUsage.RENDER_ATTACHMENT,
 				size: [canvasTexture.width, canvasTexture.height],
-				sampleCount: 4,
+				sampleCount: multisampleCount,
 			});
 		}
 
@@ -706,10 +747,31 @@ async function main() {
 		renderPassDescriptor.colorAttachments[0].resolveTarget = 
 			canvasTexture.createView();
 		const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+
+		///*
+		// new
+		if (scale > 2.3) {
+			// normal
+			renderPass.setPipeline(vertexPipeline);
+			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			renderPass.setVertexBuffer(0, vertexBuffer);
+			renderPass.draw(3, kNumObjects);
+		} else {
+			// small	
+			renderPass.setPipeline(vertexPipelineSmall);
+			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			renderPass.draw(1, kNumObjects);
+		}
+		//*/
+
+
+		/*
 		renderPass.setPipeline(vertexPipeline);
 		renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
 		renderPass.setVertexBuffer(0, vertexBuffer);
 		renderPass.draw(3, kNumObjects);
+		*/
+
 	
 		renderPass.end()
 
@@ -754,6 +816,7 @@ async function main() {
 		if (MOUSE_DOWN) {
 			pan();
 		}
+
 		updateSceneUniforms();
 
 		renderScreenText();

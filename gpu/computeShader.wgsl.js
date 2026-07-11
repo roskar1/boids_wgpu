@@ -44,6 +44,7 @@ export const COMPUTE_SHADER_CODE =
 	const gridEdgeCount = 16;
 	const totalCellCount = gridEdgeCount * gridEdgeCount;
 
+	const U_INT_MAX = 4294967295;
 
 	// So these can be workgroup buffers
 	//var<storage, read_write> cellCounters: array<u32, totalCellCount>;
@@ -61,7 +62,7 @@ export const COMPUTE_SHADER_CODE =
 	//var<storage, read_write> cellContentsArray: array<cellContents, totalCellCount>;
 
 		
-	// vec2f
+	// Signed Arrays
 	@group(0) @binding(0) var<storage, read> inputPositions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read_write> outputPositions: array<vec2u>;
 
@@ -79,16 +80,16 @@ export const COMPUTE_SHADER_CODE =
 	@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
 
 
+	/*
 	@compute
-	@workgroup_size(256, 1, 1) // 1D workgroup
+	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 	fn computeMain(input: computeInput) {
 		// All this does is update positions by a constant factor
 		let i = input.id.x;
-		outputPositions[i] = vec2u(vec2f(inputPositions[i]) + inputVelocities[i]);
-
-		//outputPositions[i] = vec2u(inputPositions[i] + 1);
-
+		outputPositions[i] = inputPositions[i] + inputVelocities[i];
 		outputVelocities[i] = inputVelocities[i];
+
+
 
 		// Update Velocities to point towards mouse
 		//outputVelocities[i] = vec2f(
@@ -96,6 +97,28 @@ export const COMPUTE_SHADER_CODE =
 		//	(SceneUniforms.mouseY - f32(inputPositions[i].y)) / 10000.0
 		//);
 	}
+	*/
+
+	@compute 
+	@workgroup_size(256, 1, 1)
+	fn computeMainFloat32(input: computeInput) {
+		let i = input.id.x;
+		// Convert to float
+		let newPosition : vec2f = vec2f(inputPositions[i]) + inputVelocities[i];
+		// Wrap around and convert back to u32
+		outputPositions[i] = vec2u(fmod_f32(newPosition, U_INT_MAX));
+		outputVelocities[i] = inputVelocities[i];
+	}
+
+	// Override modulo to floored modulo function
+	fn fmod_f32(v : vec2f, y : f32) -> vec2f {
+		return vec2f(
+			((v.x % y) + y) % y,
+			((v.y % y) + y) % y
+		);
+	}
+
+
 
 	/*
 	// Do this once per boid

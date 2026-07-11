@@ -3,11 +3,16 @@
 export const VERTEX_SHADER_CODE =
 `
 	const UINTMAX : f32 = 4294967295;
+	const S_INT_MAX = 2147483647;
 
 	struct VertexInput {
 		@builtin(instance_index) instanceIndex: u32,
 		@builtin(vertex_index) vertexIndex: u32,
 		@location(0) pos: vec2f,
+	};
+
+	struct VertexInputSmall {
+		@builtin(instance_index) instanceIndex: u32,
 	};
 
 	struct VertexOutput {
@@ -25,6 +30,8 @@ export const VERTEX_SHADER_CODE =
 
 
 	// vec2f
+	//@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
+	
 	@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read> velocities: array<vec2f>;
 	@group(0) @binding(2) var<uniform> SceneUniforms: sceneUniforms;
@@ -40,18 +47,13 @@ export const VERTEX_SHADER_CODE =
 
 		// Normalized Velocity
 		var u : vec2f = normalize(velocity);
-		let rotate : mat2x2f = mat2x2f(-u.y, u.x, -u.x, -u.y);
+		//let rotate : mat2x2f = mat2x2f();
 
-		/*
-		let theta = atan2(velocity.y, velocity.x);
-		let c = cos(theta);
-		let s = sin(theta);
+		let rotate : mat2x2f = mat2x2f(
+			-u.y,  u.x, 
+			-u.x, -u.y
+		);
 
-
-		//Rotation matrix
-		let rotate = mat2x2f(vec2f(c, s), vec2f(-s, c));
-	
-		*/
 
 		// Offset is already negative or positive correctly based on right/left
 		var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
@@ -80,12 +82,35 @@ export const VERTEX_SHADER_CODE =
 		return vsOutput;
 	}
 
+	@vertex
+	fn vertexMainSmall(input: VertexInputSmall) -> VertexOutput {
+
+		let position : vec2f = worldToScreen(positions[input.instanceIndex]);
+		var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
+		var vsOutput: VertexOutput;
+		vsOutput.position = vec4f
+		(
+			(panVector + position) * SceneUniforms.zoom,
+			0.0,
+			1.0
+		);
+		
+		return vsOutput;
+	}
+
 	fn worldToScreen(v : vec2u) -> vec2f {
-		// When casting a u32 vector to a f32 vector, it must be explcit componentwise
-		let new_vector : vec2f = vec2f(f32(v.x), f32(v.y));
+		// When casting a u32 vector to a f32 vector, it must be explicit componentwise
+		//let new_vector : vec2f = vec2f(v);
 
 		// returns a float vector between -1 and 1
-		return (new_vector / (UINTMAX / 2.0)) - 1.0;
+		return (vec2f(v) / (UINTMAX / 2.0)) - 1.0;
+	}
+
+	fn worldToScreenHalf(v : vec2i) -> vec2f {
+		let new_vector : vec2f = vec2f(f32(v.x), f32(v.y));
+
+		return (new_vector / (S_INT_MAX / 2.0)) - 1.0;
+
 	}
 
 	@fragment
