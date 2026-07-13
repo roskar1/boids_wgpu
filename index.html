@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <title>Boids</title>
-<link href="style.css?v=3", rel="stylesheet">
+<link href="style.css", rel="stylesheet">
 
 <style>
 html, body {
@@ -24,12 +24,19 @@ canvas {
 <div style="position: relative;">
 	
 	<canvas id="myCanvas" width="512" height="512" style="background-color: #000;"></canvas>
-	<p id="unique-paragraph">
+	<p id="title-paragraph">
 		Specs
 	</p>
 
-	<p id="screen-log"></p>
+	<p id="frameLog"></p>
 	<p id="screen-log-zoom"></p>
+
+	<!--<button id="firstButton">render primitive</button>-->
+
+	<button class="feature-btn" onclick="updateButton(this)">
+		render primitive
+	</button>
+
 </div>
 
 

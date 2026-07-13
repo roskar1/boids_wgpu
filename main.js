@@ -30,6 +30,17 @@ class NonNegativeRollingAverage {
 }
 
 
+// Feature Flags
+let RENDER_PRIMITIVE = false;
+
+// Button Functions
+function updateButton(buttonElement) {
+	buttonElement.classList.toggle('active');
+	console.log("button updated");
+	RENDER_PRIMITIVE = !RENDER_PRIMITIVE;
+}
+
+window.updateButton = updateButton;
 
 
 
@@ -132,6 +143,7 @@ async function main() {
 	// Rendering text	
 	let bootstrapTime;
 
+
 	//-------------------------------------------------------------------------
 	// Useful Functions
 	//-------------------------------------------------------------------------
@@ -149,10 +161,10 @@ async function main() {
 
 
 
-	// gputime variable is returned in nanoseconds. Dived by 1000 to get
-	// microseconds, and 1000000 for miliseconds
+	// gputime variable is returned in nanoseconds. Divided by 1000 to get
+	// us, and 1000000 for ms
 	function renderScreenText() {
-		screenLog.innerText = 
+		frameLog.innerText = 
 		`gpu ${canTimestamp ? `${gpuAverage.get().toFixed(1)} ms (${(1 / (gpuAverage.get() / 1000)).toFixed(0)} fps)` : 'N/A'} 
 		update ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
 		render ${canTimestamp ? `${vertexAverage.get().toFixed(1)} ms` : 'N/A'} 
@@ -750,17 +762,18 @@ async function main() {
 
 		///*
 		// new
-		if (scale > 2.3) {
+		//if (scale > 2.3) {
+		if (RENDER_PRIMITIVE) {
+			// small	
+			renderPass.setPipeline(vertexPipelineSmall);
+			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			renderPass.draw(1, kNumObjects);
+		} else {
 			// normal
 			renderPass.setPipeline(vertexPipeline);
 			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
 			renderPass.setVertexBuffer(0, vertexBuffer);
 			renderPass.draw(3, kNumObjects);
-		} else {
-			// small	
-			renderPass.setPipeline(vertexPipelineSmall);
-			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
-			renderPass.draw(1, kNumObjects);
 		}
 		//*/
 
