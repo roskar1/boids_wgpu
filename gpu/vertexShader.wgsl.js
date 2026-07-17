@@ -35,6 +35,7 @@ export const VERTEX_SHADER_CODE =
 	@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read> velocities: array<vec2f>;
 	@group(0) @binding(2) var<uniform> SceneUniforms: sceneUniforms;
+	@group(0) @binding(3) var<storage> cellCounters: array<u32>;
 
 	@vertex
 	fn vertexMain(input: VertexInput) -> VertexOutput {
@@ -78,6 +79,21 @@ export const VERTEX_SHADER_CODE =
 
 		// Color
 		//vsOutput.color = color[input.vertexIndex];
+		vsOutput.color = vec4f(1.0, 1.0, 1.0, 1.0);
+	
+		return vsOutput;
+	}
+
+	@vertex
+	fn vertexGridPass(input: VertexInput) -> VertexOutput {
+		var vsOutput: VertexOutput;
+		vsOutput.position = vec4f
+		(
+			input.pos,
+			0.0,
+			1.0
+		);
+		vsOutput.color = vec4f(1, 0, 0, 0.5);
 
 		return vsOutput;
 	}
@@ -94,6 +110,8 @@ export const VERTEX_SHADER_CODE =
 			0.0,
 			1.0
 		);
+
+		vsOutput.color = vec4f(1.0, 1.0, 0.0, 1.0);
 		
 		return vsOutput;
 	}
@@ -115,8 +133,8 @@ export const VERTEX_SHADER_CODE =
 
 	@fragment
 	fn fragmentMain(fsInput: VertexOutput) -> @location(0) vec4f {
-		return vec4f(1.0, 1.0, 1.0, 1.0);
+		//return vec4f(1.0, 1.0, 1.0, 1.0);
 		// Color
-		//return fsInput.color;
+		return fsInput.color;
 	}	
 `;

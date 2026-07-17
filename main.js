@@ -84,7 +84,10 @@ async function main() {
 
 	// The canvas format is used in fragment shader and canvas configuration
 	const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
-	context.configure({ device: device, format: canvasFormat });
+	context.configure({ 
+		device: device, 
+		format: canvasFormat,
+	});
 		
 	// Canvas resize listener
 	resizeCanvas(); // Initially resize canvas
@@ -319,7 +322,6 @@ async function main() {
 	//-------------------------------------------------------------------------
 
 	let vertexBindGroupLayout;
-	let vertexBuffer;
 	let vertexPipeline;
 	let multisampleCount = 4;
 	
@@ -339,6 +341,10 @@ async function main() {
 			binding: 2, // Mouse Details
 			visibility: GPUShaderStage.VERTEX,
 			buffer: {}
+		}, {
+			binding: 3, 
+			visibility: GPUShaderStage.VERTEX,
+			buffer: { type: "read-only-storage" }
 		}]
 	});
 
@@ -354,7 +360,7 @@ async function main() {
 		 0.5,  1.0,
 	]);
 	
-	vertexBuffer = device.createBuffer({
+	const vertexBuffer = device.createBuffer({
 		label: "Cell Vertices",
 		size: vertices.byteLength,
 		usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
@@ -369,6 +375,37 @@ async function main() {
 			shaderLocation: 0,
 		}],
 	};
+
+
+
+
+
+	// Alternate Vertex Buffer
+	const gridVertices = new Float32Array([
+	//     X,    Y,
+		-0.8, -0.8, // Triangle 1
+		 0.8,  -0.8,
+		 0.8,   0.8,
+		
+		-0.8, -0.8, // Triangle 2
+		 0.8,  0.8,
+		-0.8,  0.8,
+	]);
+
+	const gridVertexBuffer = device.createBuffer({
+		label: "Grid Vertices",
+		size: gridVertices.byteLength,
+		// COPY_DST allows you to writeBuffer an array into the buffer
+		usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+	});
+
+	device.queue.writeBuffer(gridVertexBuffer, 0, gridVertices);
+
+
+
+
+
+
 
 	const vertexModule = device.createShaderModule({
 		label: "Hardcoded Triangle Shader",
@@ -403,7 +440,7 @@ async function main() {
 	// point-list topology
 	// Use this after 0.9 zoom
 	const vertexPipelineSmall = device.createRenderPipeline({
-		label: "Vertex Pipeline",
+		label: "Primitive VertexPipeline",
 		layout: vertexPipelineLayout,
 		vertex: {
 			module: vertexModule,
@@ -424,6 +461,46 @@ async function main() {
 			topology: "point-list",
 		},
 	});
+
+	// 2nd render pass pipeline
+	// cubic vertex buffer
+	const vertexPipelineGrid = device.createRenderPipeline({
+		label: "Grid Render Pass",
+		layout: vertexPipelineLayout,
+		vertex: {
+			module: vertexModule,
+			entryPoint: "vertexGridPass",
+			// The layout needed is identical to the triangle vertex buffer
+			buffers: [vertexBufferLayout]
+		},
+		fragment: {
+			module: vertexModule,
+			entryPoint: "fragmentMain",
+			targets: [{
+				format: canvasFormat,
+				
+				// Blend for opacity
+				blend: {
+					color: {
+						srcFactor: 'src-alpha',
+						dstFactor: 'one-minus-src-alpha',
+						operation: 'add',
+					},
+					alpha: {
+						srcFactor: 'one',
+						dstFactor: 'one-minus-src-alpha',
+						operation: 'add',
+					}
+				}
+			}],
+		},
+		multisample: {
+			count: multisampleCount,
+		},
+	});
+			
+
+	
 
 
 
@@ -466,7 +543,7 @@ async function main() {
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: { type: "storage" }
 		}, {
-			binding: 6, // Buffer for boid storage
+			binding: 6, // Buffer for cellCounters
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: { type: "storage" }
 		}]
@@ -490,6 +567,25 @@ async function main() {
 			entryPoint: "computeMainFloat32",
 		},
 	});
+
+	//-------------------------------------------------------------------------
+	// Init Data unified
+	//-------------------------------------------------------------------------
+	//const initialData = new 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 	//-------------------------------------------------------------------------
 	// Init Data
@@ -569,6 +665,7 @@ async function main() {
 
 	// helper buffer for sorting the boids
 	// contains vec4 of 32 bit items
+	/*
 	const cellContents = new Uint32Array(size * 2);
 
 	const cellContentsHelperBuffer = device.createBuffer({
@@ -578,6 +675,20 @@ async function main() {
 	});
 
 	device.queue.writeBuffer(cellContentsHelperBuffer, 0, cellContents);
+	*/
+
+	const edgeCount = 16;
+	const totalCellCount = edgeCount * edgeCount;
+	const cellCountersStorageBuffer = new Uint32Array(totalCellCount);
+
+
+	const cellCountersHelperBuffer = device.createBuffer({
+		label: "Helper Buffer to store cell contents for each cell",
+		size: cellCountersStorageBuffer.byteLength,
+		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+	});
+
+	device.queue.writeBuffer(cellCountersHelperBuffer, 0, cellCountersStorageBuffer);
 
 
 	// Bind Groups
@@ -605,7 +716,7 @@ async function main() {
 				resource: { buffer: cellIndicesHelperBuffer }
 			}, {
 				binding: 6,
-				resource: { buffer: cellContentsHelperBuffer }
+				resource: { buffer: cellCountersHelperBuffer }
 			}],
 		}),
 		device.createBindGroup({
@@ -631,7 +742,7 @@ async function main() {
 				resource: { buffer: cellIndicesHelperBuffer }
 			}, {
 				binding: 6,
-				resource: { buffer: cellContentsHelperBuffer }
+				resource: { buffer: cellCountersHelperBuffer }
 			}],
 		}),
 	];
@@ -649,6 +760,9 @@ async function main() {
 			}, {
 				binding: 2,
 				resource: { buffer: uniformBuffer }
+			}, {
+				binding: 3,
+				resource: { buffer: cellCountersHelperBuffer }
 			}],
 		}), 
 		device.createBindGroup({
@@ -663,6 +777,9 @@ async function main() {
 			}, {
 				binding: 2,
 				resource: { buffer: uniformBuffer }
+			}, {
+				binding: 3,
+				resource: { buffer: cellCountersHelperBuffer }
 			}],
 		})
 	];
@@ -670,7 +787,7 @@ async function main() {
 	
 	// If the feature exists, we'll add a timestampWrites section to the 
 	// descriptor
-	const renderPassDescriptor = {
+	const vertexRenderPassDescriptor = {
 		label: "Canvas renderPass",
 		colorAttachments: [{
 			clearValue: [0, 0, 0, 1],
@@ -684,6 +801,23 @@ async function main() {
 				endOfPassWriteIndex: 1,
 			},
 		}),
+	};
+	
+	const gridRenderPassDescriptor = {
+		label: "Canvas renderPass",
+		colorAttachments: [{
+			loadOp: "load",
+			storeOp: "store",
+		}],
+		/*
+		...(canTimestamp && { // Conditional object property!
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 0,
+				endOfPassWriteIndex: 1,
+			},
+		}),
+		*/
 	};
 
 	const computePassDescriptor = {
@@ -721,6 +855,7 @@ async function main() {
 		const computePass = encoder.beginComputePass(computePassDescriptor);
 		computePass.setPipeline(computePipeline);
 		computePass.setBindGroup(0, computeBindGroups[step % 2]);
+		// With 256 workgroups and 1mil partices, this dispatches 3907 workgroups
 		const workgroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
 		computePass.dispatchWorkgroups(workgroupCount);
 		computePass.end();
@@ -753,12 +888,12 @@ async function main() {
 			});
 		}
 
-		renderPassDescriptor.colorAttachments[0].view = 
+		vertexRenderPassDescriptor.colorAttachments[0].view = 
 			multisampleTexture.createView();
 	
-		renderPassDescriptor.colorAttachments[0].resolveTarget = 
+		vertexRenderPassDescriptor.colorAttachments[0].resolveTarget = 
 			canvasTexture.createView();
-		const renderPass = encoder.beginRenderPass(renderPassDescriptor);
+		const renderPass = encoder.beginRenderPass(vertexRenderPassDescriptor);
 
 		///*
 		// new
@@ -777,7 +912,6 @@ async function main() {
 		}
 		//*/
 
-
 		/*
 		renderPass.setPipeline(vertexPipeline);
 		renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
@@ -787,6 +921,23 @@ async function main() {
 
 	
 		renderPass.end()
+
+		// Quick multisample texture construction
+		gridRenderPassDescriptor.colorAttachments[0].view = 
+			multisampleTexture.createView();
+		gridRenderPassDescriptor.colorAttachments[0].resolveTarget = 
+			canvasTexture.createView();
+
+		// Grid Render Pass <-------------------------------------------------
+		const gridRenderPass = encoder.beginRenderPass(gridRenderPassDescriptor);
+		gridRenderPass.setPipeline(vertexPipelineGrid);
+		gridRenderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+		gridRenderPass.setVertexBuffer(0, gridVertexBuffer);
+		// Temporarily draw the vertices
+		gridRenderPass.draw(gridVertices.length / 2);
+		gridRenderPass.end();
+
+
 
 		// This takes the results of the query and puts them in the buffer
 		if (canTimestamp) {

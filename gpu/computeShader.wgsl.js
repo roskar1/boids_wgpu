@@ -41,28 +41,10 @@ export const COMPUTE_SHADER_CODE =
 	};
 
 	// Temporary grid size
-	const gridEdgeCount = 16;
+	const gridEdgeCount = 16; //<-----------------------------------------------
 	const totalCellCount = gridEdgeCount * gridEdgeCount;
-
 	const U_INT_MAX = 4294967295;
 
-	// So these can be workgroup buffers
-	//var<storage, read_write> cellCounters: array<u32, totalCellCount>;
-	//var<storage, read_write> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
-
-	var<workgroup> cellCounters: array<atomic<u32>, totalCellCount>;
-	var<workgroup> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
-
-	// There a entries in this array equal to the total amount of cells. 
-	// In each entry there is a dynamically sized array. The sum of 
-	// the sizes of these arrays is equal to the number of objects.
-			
-	// This must be a storage buffer
-	// Use offsets to 
-	//var<storage, read_write> cellContentsArray: array<cellContents, totalCellCount>;
-
-		
-	// Signed Arrays
 	@group(0) @binding(0) var<storage, read> inputPositions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read_write> outputPositions: array<vec2u>;
 
@@ -70,37 +52,76 @@ export const COMPUTE_SHADER_CODE =
 	@group(0) @binding(3) var<storage, read_write> outputVelocities: array<vec2f>;
 
 
+	@group(0) @binding(4) var<uniform> SceneUniforms: sceneUniforms;
+
+	@group(0) @binding(5) var<storage, read_write> cellIndices: array<cellIndexHelperStruct>;
+	// Old binding 6
+	//@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
+
+	// new binding (6): shared cellCounters
+	@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	// So these can be workgroup buffers
+	//var<storage, read_write> cellCounters: array<u32, totalCellCount>;
+	//var<storage, read_write> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
+
+
+	// workgroup storage is shared by all threads in a workgroup. Therefore it 
+	// it is incredibly fast but limited in size. In an ideal world, we could 
+	// have each workgroup
+	//var<workgroup> cellCounters: array<atomic<u32>, totalCellCount>;
+	//var<workgroup> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
+
 	// vec4 implementation - optimal size for registers
 	// @group(0) @binding(0) var<storage, read> inputParticles: array<Boid>;
 	// @group(0) @binding(1) var<storage, read_write> outputParticles: array<Boid>;
 
 
-	@group(0) @binding(4) var<uniform> SceneUniforms: sceneUniforms;
-	@group(0) @binding(5) var<storage, read_write> cellIndices: array<cellIndexHelperStruct>;
-	@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
 
+	// CELLINDICES is yet another massive array which stores and entry for each 
+	// boid that contains
+	// 1. the cell that boid is found in (4 bytes)
+	// 2. the place in the cell(index)   (4 bytes)
 
-	/*
-	@compute
-	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
-	fn computeMain(input: computeInput) {
-		// All this does is update positions by a constant factor
-		let i = input.id.x;
-		outputPositions[i] = inputPositions[i] + inputVelocities[i];
-		outputVelocities[i] = inputVelocities[i];
+	// This buffer can be data optimized as the cell is limited to the variable
+	// totalCellCount which by default is a number between 1 and 256. 
 
 
 
-		// Update Velocities to point towards mouse
-		//outputVelocities[i] = vec2f(
-		//	(SceneUniforms.mouseX - f32(inputPositions[i].x)) / 10000.0, 
-		//	(SceneUniforms.mouseY - f32(inputPositions[i].y)) / 10000.0
-		//);
-	}
-	*/
+	// CELLCONTENTSARRAY is another massive storage binding containing a boid
+	// entry of [16 bytes] for every single one of the 1-64 million boids. 
+	// I believe it could be replaced by an index of each boid. Picture this,
+	// The input positions array remains unchanged while a buffer of indices in 
+	// sorted order is maintained. While the input positions may look like this:
+	// [0, 1, 2, 3, 4, ... ],
+	// The cellcontentsarray will look like this:
+	// [3, 4, 2, 0, 1, ... ].
+	// Each value is an index of the boid. In an arbitrary example with startIndex
+	// of 0 and endIndex of 2 for cell 1, boids 3, 4, and 2 are found in that cell spatially, 
+	// The update call then loops from startIndex to endIndex of cellContents, 
+	// for each boid, accessing the boids at those indices in cellContents that 
+	// are found in the ping-ponging buffers
+
 
 	@compute 
-	@workgroup_size(256, 1, 1)
+	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 	fn computeMainFloat32(input: computeInput) {
 		let i = input.id.x;
 		// Convert to float
@@ -110,7 +131,7 @@ export const COMPUTE_SHADER_CODE =
 		outputVelocities[i] = inputVelocities[i];
 	}
 
-	// Override modulo to floored modulo function
+	// Override modulo to floored modulo function for unsigned canvas wrapping
 	fn fmod_f32(v : vec2f, y : f32) -> vec2f {
 		return vec2f(
 			((v.x % y) + y) % y,
@@ -131,7 +152,22 @@ export const COMPUTE_SHADER_CODE =
 		cellIndices[i].cell = cell;
 		cellIndices[i].indexWithinCell = atomicLoad(&cellCounters[cell]);
 		atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
+		//share cell counters with vertex shader for opacity measurements
 	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 	// Do this once per cell
 	// If workgroup size is the number of cells this could work
@@ -139,7 +175,7 @@ export const COMPUTE_SHADER_CODE =
 	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 	fn alloc(input: computeInput) {
 		let i = input.id.x;
-		var prefixSum: u32 = 0u;
+		//var prefixSum: u32 = 0u;
 		// The variable i here represents the cell id and not the boid
 		let cellCount = atomicLoad(&cellCounters[i]);
 
