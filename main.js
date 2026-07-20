@@ -277,9 +277,10 @@ async function main() {
 
 	//console.log("3. Initializing Miscellaneous variables...");
 
-	//0: mouseX, 1: mouseY, 2: mouseZoom, 3: fOffsetX, 4: fOffsetY
+	//0: mouseX, 1: mouseY, 2: mouseZoom, 3: fOffsetX, 4: fOffsetY, 5: cellDensity
 	const sceneUniforms = new Float32Array(5);
 	sceneUniforms[2] = scale;
+	//sceneUniforms[5] = gridEdgeCount;
 
 	// This stores SceneUniforms
 	const uniformBuffer = device.createBuffer({
@@ -379,17 +380,16 @@ async function main() {
 
 
 
-
 	// Alternate Vertex Buffer
 	const gridVertices = new Float32Array([
 	//     X,    Y,
-		-0.8, -0.8, // Triangle 1
-		 0.8,  -0.8,
-		 0.8,   0.8,
+		-0.99, -0.99, // Triangle 1
+		 0.99, -0.99,
+		 0.99,  0.99,
 		
-		-0.8, -0.8, // Triangle 2
-		 0.8,  0.8,
-		-0.8,  0.8,
+		-0.99, -0.99, // Triangle 2
+		 0.99,  0.99,
+		-0.99,  0.99,
 	]);
 
 	const gridVertexBuffer = device.createBuffer({
@@ -934,7 +934,7 @@ async function main() {
 		gridRenderPass.setBindGroup(0, vertexBindGroups[step % 2]);
 		gridRenderPass.setVertexBuffer(0, gridVertexBuffer);
 		// Temporarily draw the vertices
-		gridRenderPass.draw(gridVertices.length / 2);
+		gridRenderPass.draw(gridVertices.length / 2, 256);
 		gridRenderPass.end();
 
 

@@ -200,7 +200,7 @@ export const COMPUTE_SHADER_CODE =
 				inputVelocities[i].x,
 				inputVelocities[i].y
 			);
-		}
+	}
 
 	fn getCell(v: vec2u) -> u32 {
 		let xPosition = v.x;

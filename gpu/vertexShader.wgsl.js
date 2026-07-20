@@ -29,9 +29,6 @@ export const VERTEX_SHADER_CODE =
 	};
 
 
-	// vec2f
-	//@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
-	
 	@group(0) @binding(0) var<storage, read> positions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read> velocities: array<vec2f>;
 	@group(0) @binding(2) var<uniform> SceneUniforms: sceneUniforms;
@@ -57,7 +54,7 @@ export const VERTEX_SHADER_CODE =
 
 
 		// Offset is already negative or positive correctly based on right/left
-		var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
+		var panVector : vec2f = vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
 
 		// color
 		/*
@@ -72,7 +69,7 @@ export const VERTEX_SHADER_CODE =
 
 		vsOutput.position = vec4f
 		(
-			((rotate * input.pos / 1000) + (position + panVector)) * SceneUniforms.zoom,
+			((rotate * input.pos / 2500) + (position + panVector)) * SceneUniforms.zoom,
 			0.0, 
 			1.0
 		);
@@ -86,14 +83,29 @@ export const VERTEX_SHADER_CODE =
 
 	@vertex
 	fn vertexGridPass(input: VertexInput) -> VertexOutput {
+	
+		let gridEdge : u32 = 16;
+		// u32 division is automatically truncated towards 0
+		let scaleFactor : u32 = u32(UINTMAX) / gridEdge;
+
+		let i : u32 = input.instanceIndex;
+
+		let X = i % gridEdge;
+		let Y = i / gridEdge;
+
+		var offset: vec2u = (vec2u(X, Y)) * scaleFactor;
+		var offsetWorld: vec2f = worldToScreen(offset);
+
+		var panVector : vec2f = vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
+
 		var vsOutput: VertexOutput;
 		vsOutput.position = vec4f
 		(
-			input.pos,
+			(((input.pos + 1.0) / f32(gridEdge)) + (offsetWorld + panVector)) * SceneUniforms.zoom,
 			0.0,
 			1.0
 		);
-		vsOutput.color = vec4f(1, 0, 0, 0.5);
+		vsOutput.color = vec4f(0, 0, 1, 0.5);
 
 		return vsOutput;
 	}
@@ -102,7 +114,7 @@ export const VERTEX_SHADER_CODE =
 	fn vertexMainSmall(input: VertexInputSmall) -> VertexOutput {
 
 		let position : vec2f = worldToScreen(positions[input.instanceIndex]);
-		var panVector : vec2f = position + vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
+		var panVector : vec2f = /*position + */ vec2f(SceneUniforms.offsetX, SceneUniforms.offsetY);
 		var vsOutput: VertexOutput;
 		vsOutput.position = vec4f
 		(
@@ -111,15 +123,12 @@ export const VERTEX_SHADER_CODE =
 			1.0
 		);
 
-		vsOutput.color = vec4f(1.0, 1.0, 0.0, 1.0);
+		vsOutput.color = vec4f(1.0, 1.0, 1.0, 1.0);
 		
 		return vsOutput;
 	}
 
 	fn worldToScreen(v : vec2u) -> vec2f {
-		// When casting a u32 vector to a f32 vector, it must be explicit componentwise
-		//let new_vector : vec2f = vec2f(v);
-
 		// returns a float vector between -1 and 1
 		return (vec2f(v) / (UINTMAX / 2.0)) - 1.0;
 	}
