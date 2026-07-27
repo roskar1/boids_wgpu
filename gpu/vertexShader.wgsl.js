@@ -4,6 +4,7 @@ export const VERTEX_SHADER_CODE =
 `
 	const UINTMAX : f32 = 4294967295;
 	const S_INT_MAX = 2147483647;
+	const numBoids = 1000000; // 1 mil
 
 	struct VertexInput {
 		@builtin(instance_index) instanceIndex: u32,
@@ -93,7 +94,9 @@ export const VERTEX_SHADER_CODE =
 		let X = i % gridEdge;
 		let Y = i / gridEdge;
 
-		var opacity: f32 = f32(cellCounters[i]) / 1000000000000.0;
+		// The number 15k here represents the density represented by the maximum opacity
+		var density = 2 * (numBoids / f32(gridEdge * gridEdge));
+		var opacity: f32 = clamp(f32(cellCounters[i]) / density, 0, 1.0);
 
 		var offset: vec2u = (vec2u(X, Y)) * scaleFactor;
 		var offsetWorld: vec2f = worldToScreen(offset);
@@ -107,7 +110,7 @@ export const VERTEX_SHADER_CODE =
 			0.0,
 			1.0
 		);
-		vsOutput.color = vec4f(0, 0, 1, opacity + 0.1);
+		vsOutput.color = vec4f(opacity, opacity, opacity, 0.4);
 
 		return vsOutput;
 	}

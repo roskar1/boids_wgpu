@@ -59,8 +59,8 @@ export const COMPUTE_SHADER_CODE =
 	//@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
 
 	// new binding (6): shared cellCounters
-	//@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
-	@group(0) @binding(6) var<storage, read_write> cellCounters: array<u32, totalCellCount>;
+	@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
+	//@group(0) @binding(6) var<storage, read_write> cellCounters: array<u32, totalCellCount>;
 
 
 
@@ -146,7 +146,8 @@ export const COMPUTE_SHADER_CODE =
 	fn count(input: computeInput) {
 		let i = input.id.x;
 		let cell = getCell(inputPositions[i]);
-		cellCounters[cell]++;
+		atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
+		//cellCounters[cell]++;
 	}
 
 	

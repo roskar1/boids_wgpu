@@ -568,6 +568,16 @@ async function main() {
 		},
 	});
 
+
+	const countPassPipeline = device.createComputePipeline({
+		label: "Compute shader count stage pipeline",
+		layout: computePipelineLayout,
+		compute: {
+			module: computeModule,
+			entryPoint: "count",
+		},
+	});
+
 	//-------------------------------------------------------------------------
 	// Init Data unified
 	//-------------------------------------------------------------------------
@@ -623,7 +633,7 @@ async function main() {
 
 	//for (let i = 0; i < size; ++i) { initialPositions[i] = rand(0, uintMax); }
 	
-	for	(let i = 0; i < size; ++i) { initialPositions[i] = rand(0, U_INT_MAX); }
+	for	(let i = 0; i < size; ++i) { initialPositions[i] = rand(U_INT_MAX / 4, 3 * (U_INT_MAX / 4)); }
 
 	device.queue.writeBuffer(positionStorageBuffers[0], 0, initialPositions);
 
@@ -687,6 +697,14 @@ async function main() {
 		size: cellCountersStorageBuffer.byteLength,
 		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 	});
+
+
+	const cellCountersResults = device.createBuffer({
+		label: "A buffer used to check to results of the count stage",
+		size: cellCountersStorageBuffer.byteLength,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+
 
 	device.queue.writeBuffer(cellCountersHelperBuffer, 0, cellCountersStorageBuffer);
 
@@ -831,6 +849,10 @@ async function main() {
 		}),
 	};
 
+	const countComputePassDescriptor = {
+		label: "Simulation count compute pass",
+	};
+
 	//-------------------------------------------------------------------------
 	// Frame function
 	//-------------------------------------------------------------------------
@@ -859,7 +881,30 @@ async function main() {
 		const workgroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
 		computePass.dispatchWorkgroups(workgroupCount);
 		computePass.end();
-	
+
+
+
+		// Count /////////////////////////////////////////////////////////////
+		encoder.clearBuffer(cellCountersHelperBuffer);
+		const countComputePass = encoder.beginComputePass(countComputePassDescriptor);
+		countComputePass.setPipeline(countPassPipeline);
+		countComputePass.setBindGroup(0, computeBindGroups[step % 2]);
+		countComputePass.dispatchWorkgroups(workgroupCount);
+		countComputePass.end();
+		///////////////////////////////////////////////////////////////////////
+
+
+
+
+
+
+
+
+
+
+
+
+
 		// Update buffer pointers
 		step++;
 	
@@ -895,9 +940,10 @@ async function main() {
 			canvasTexture.createView();
 		const renderPass = encoder.beginRenderPass(vertexRenderPassDescriptor);
 
-		///*
-		// new
-		//if (scale > 2.3) {
+
+
+
+
 		if (RENDER_PRIMITIVE) {
 			// small	
 			renderPass.setPipeline(vertexPipelineSmall);
@@ -910,17 +956,15 @@ async function main() {
 			renderPass.setVertexBuffer(0, vertexBuffer);
 			renderPass.draw(3, kNumObjects);
 		}
-		//*/
-
-		/*
-		renderPass.setPipeline(vertexPipeline);
-		renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
-		renderPass.setVertexBuffer(0, vertexBuffer);
-		renderPass.draw(3, kNumObjects);
-		*/
-
 	
 		renderPass.end()
+
+
+
+
+
+
+
 
 		// Quick multisample texture construction
 		gridRenderPassDescriptor.colorAttachments[0].view = 
@@ -952,9 +996,29 @@ async function main() {
 				encoder.copyBufferToBuffer(resolveBuffer, 0, resultBuffer, 0, resultBuffer.size);
 			}
 		}
-	
+
+
+
+
+		// Attempt to read cell counters
+		if (cellCountersResults.mapState === 'unmapped') {
+			encoder.copyBufferToBuffer(cellCountersHelperBuffer, 0, cellCountersResults, 0, cellCountersResults.size);
+		}
+
 		device.queue.submit([encoder.finish()]);
-	
+
+		if (resultBuffer.mapState === 'unmapped') {
+			cellCountersResults.mapAsync(GPUMapMode.READ).then(() => {
+				const cells = new Uint32Array(cellCountersResults.getMappedRange());
+				console.log(cells);
+				cellCountersResults.unmap();
+			});
+		}
+
+
+
+
+
 		// There is no guarantee when mapAsync will resolve. Most likely a 
 		// reading on the times will only arrive every other frame
 		if (canTimestamp && resultBuffer.mapState === 'unmapped') {
