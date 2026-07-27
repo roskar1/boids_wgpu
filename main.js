@@ -157,11 +157,13 @@ async function main() {
 	// bootstrap: xxx (us)
 	// render: xxx (ms)
 	// compute: xxx (ms)
-
-	const gpuAverage = new NonNegativeRollingAverage();
+	const updateAverage = new NonNegativeRollingAverage();
+	const countAverage = new NonNegativeRollingAverage();
+	const drawBoidAverage = new NonNegativeRollingAverage();
+	const drawGridAverage = new NonNegativeRollingAverage();
 	const computeAverage = new NonNegativeRollingAverage();
-	const vertexAverage = new NonNegativeRollingAverage();
-
+	const renderAverage = new NonNegativeRollingAverage();
+	const gpuAverage = new NonNegativeRollingAverage();
 
 
 	// gputime variable is returned in nanoseconds. Divided by 1000 to get
@@ -169,8 +171,12 @@ async function main() {
 	function renderScreenText() {
 		frameLog.innerText = 
 		`gpu ${canTimestamp ? `${gpuAverage.get().toFixed(1)} ms (${(1 / (gpuAverage.get() / 1000)).toFixed(0)} fps)` : 'N/A'} 
-		update ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
-		render ${canTimestamp ? `${vertexAverage.get().toFixed(1)} ms` : 'N/A'} 
+		computePass ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
+		update ${canTimestamp ? `${updateAverage.get().toFixed(1)} ms` : 'N/A'} 
+		count ${canTimestamp ? `${countAverage.get().toFixed(1)} ms` : 'N/A'} 
+		renderPass ${canTimestamp ? `${renderAverage.get().toFixed(1)} ms` : 'N/A'} 
+		draw boid ${canTimestamp ? `${drawBoidAverage.get().toFixed(1)} ms` : 'N/A'} 
+		draw grid ${canTimestamp ? `${drawGridAverage.get().toFixed(1)} ms` : 'N/A'} 
 		zoom ${scale}
 		`;
 	}
@@ -300,7 +306,7 @@ async function main() {
 		// An array of query results
 		const querySet = device.createQuerySet({
 			type: 'timestamp',
-			count: 4,
+			count: 8,
 		});
 
 		// Buffer to convert the querySet into accessible data
@@ -699,12 +705,14 @@ async function main() {
 	});
 
 
+	/*
 	const cellCountersResults = device.createBuffer({
 		label: "A buffer used to check to results of the count stage",
 		size: cellCountersStorageBuffer.byteLength,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 	});
-
+	*/
+	
 
 	device.queue.writeBuffer(cellCountersHelperBuffer, 0, cellCountersStorageBuffer);
 
@@ -815,8 +823,8 @@ async function main() {
 		...(canTimestamp && { // Conditional object property!
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 0,
-				endOfPassWriteIndex: 1,
+				beginningOfPassWriteIndex: 4,
+				endOfPassWriteIndex: 5,
 			},
 		}),
 	};
@@ -827,19 +835,28 @@ async function main() {
 			loadOp: "load",
 			storeOp: "store",
 		}],
-		/*
 		...(canTimestamp && { // Conditional object property!
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 0,
-				endOfPassWriteIndex: 1,
+				beginningOfPassWriteIndex: 6,
+				endOfPassWriteIndex: 7,
 			},
 		}),
-		*/
 	};
 
 	const computePassDescriptor = {
 		label: "Simulation Compute Pass",
+		...(canTimestamp && {
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 0,
+				endOfPassWriteIndex: 1,
+			}
+		}),
+	};
+
+	const countComputePassDescriptor = {
+		label: "Simulation count compute pass",
 		...(canTimestamp && {
 			timestampWrites: {
 				querySet,
@@ -849,10 +866,6 @@ async function main() {
 		}),
 	};
 
-	const countComputePassDescriptor = {
-		label: "Simulation count compute pass",
-	};
-
 	//-------------------------------------------------------------------------
 	// Frame function
 	//-------------------------------------------------------------------------
@@ -860,10 +873,6 @@ async function main() {
 
 	let step = 0;
 	let multisampleTexture;
-	let then = 0;
-	let gpuTime = 0;
-	let computeTime = 0;
-	let vertexTime = 0;
 
 	// Combined Render and Compute
 	// The reason we unified this is because submitting multiple command 
@@ -999,14 +1008,18 @@ async function main() {
 
 
 
-
+		/*
 		// Attempt to read cell counters
 		if (cellCountersResults.mapState === 'unmapped') {
 			encoder.copyBufferToBuffer(cellCountersHelperBuffer, 0, cellCountersResults, 0, cellCountersResults.size);
 		}
+		*/
+
 
 		device.queue.submit([encoder.finish()]);
 
+
+		/*
 		if (resultBuffer.mapState === 'unmapped') {
 			cellCountersResults.mapAsync(GPUMapMode.READ).then(() => {
 				const cells = new Uint32Array(cellCountersResults.getMappedRange());
@@ -1014,6 +1027,9 @@ async function main() {
 				cellCountersResults.unmap();
 			});
 		}
+		*/
+
+
 
 
 
@@ -1024,13 +1040,26 @@ async function main() {
 		if (canTimestamp && resultBuffer.mapState === 'unmapped') {
 			resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
 				const times = new BigUint64Array(resultBuffer.getMappedRange());
-				// index 2 is beginning of compute, index 1 is end of render
-				gpuTime = Number(times[1] - times[2]);
-				computeTime = Number(times[3] - times[2]);
-				vertexTime = Number(times[1] - times[0]);
-				gpuAverage.addSample(gpuTime / 1000000);
+
+				let updateTime = Number(times[1] - times[0]);
+				let countTime = Number(times[3] - times[2]);
+
+				let drawBoidTime = Number(times[5] - times[4]);
+				let drawGridTime = Number(times[7] - times[6]);
+
+				let computeTime = updateTime + countTime;
+				let renderTime = drawBoidTime + drawGridTime;
+
+				let gpuTime = computeTime + renderTime;
+
+				updateAverage.addSample(updateTime / 1000000);
+				countAverage.addSample(countTime / 1000000);
+				drawBoidAverage.addSample(drawBoidTime / 1000000);
+				drawGridAverage.addSample(drawGridTime / 1000000);
 				computeAverage.addSample(computeTime / 1000000);
-				vertexAverage.addSample(vertexTime / 1000000);
+				renderAverage.addSample(renderTime / 1000000);
+				gpuAverage.addSample(gpuTime / 1000000);
+
 				resultBuffer.unmap();
 			});
 		}
