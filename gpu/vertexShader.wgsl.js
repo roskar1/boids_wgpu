@@ -93,7 +93,7 @@ export const VERTEX_SHADER_CODE =
 		let X = i % gridEdge;
 		let Y = i / gridEdge;
 
-		var opacity: f32 = f32(cellCounters[i]);
+		var opacity: f32 = f32(cellCounters[i]) / 1000000000000.0;
 
 		var offset: vec2u = (vec2u(X, Y)) * scaleFactor;
 		var offsetWorld: vec2f = worldToScreen(offset);
@@ -107,7 +107,7 @@ export const VERTEX_SHADER_CODE =
 			0.0,
 			1.0
 		);
-		vsOutput.color = vec4f(0, 0, 1, opacity + 0.5);
+		vsOutput.color = vec4f(0, 0, 1, opacity + 0.1);
 
 		return vsOutput;
 	}

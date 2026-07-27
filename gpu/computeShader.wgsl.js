@@ -59,7 +59,8 @@ export const COMPUTE_SHADER_CODE =
 	//@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
 
 	// new binding (6): shared cellCounters
-	@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
+	//@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
+	@group(0) @binding(6) var<storage, read_write> cellCounters: array<u32, totalCellCount>;
 
 
 
@@ -147,6 +148,18 @@ export const COMPUTE_SHADER_CODE =
 		let cell = getCell(inputPositions[i]);
 		cellCounters[cell]++;
 	}
+
+	
+	fn getCell(v: vec2u) -> u32 {
+		let xPosition = v.x;
+		let yPosition = v.y;
+
+		// Use only log safe values for this
+		let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
+		let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
+
+		return xCell + (yCell * gridEdgeCount);
+	}	
 
 
 
