@@ -140,6 +140,34 @@ export const COMPUTE_SHADER_CODE =
 	}
 
 
+	@compute
+	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
+	fn count(input: computeInput) {
+		let i = input.id.x;
+		let cell = getCell(inputPositions[i]);
+		cellCounters[cell]++;
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 	/*
 	// Do this once per boid
@@ -156,6 +184,16 @@ export const COMPUTE_SHADER_CODE =
 	}
 
 
+	fn getCell(v: vec2u) -> u32 {
+		let xPosition = v.x;
+		let yPosition = v.y;
+
+		// Use only log safe values for this
+		let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
+		let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
+
+		return xCell + (yCell * gridEdgeCount);
+	}	
 
 
 
