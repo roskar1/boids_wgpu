@@ -4,7 +4,7 @@ export const VERTEX_SHADER_CODE =
 `
 	const UINTMAX : f32 = 4294967295;
 	const S_INT_MAX = 2147483647;
-	const numBoids = 1000000; // 1 mil
+	const numBoids = 5000000; // 1 mil
 
 	struct VertexInput {
 		@builtin(instance_index) instanceIndex: u32,

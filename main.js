@@ -5,6 +5,8 @@ import { VERTEX_SHADER_CODE } from './gpu/vertexShader.wgsl.js';
 import { COMPUTE_SHADER_CODE } from './gpu/computeShader.wgsl.js';
 import { WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 
+import { COUNT_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
+
 // Rolling average implemented as a fixed-size array circular buffer
 class NonNegativeRollingAverage {
 	// # hashtag is private class field
@@ -111,7 +113,7 @@ async function main() {
 	//-----------------------------------------------------------------------------
 
 	// Simulation globals
-	const kNumObjects = 1000000; //2100000
+	const kNumObjects = 500000; //2100000
 	//const WORKGROUP_SIZE = 256;
 
 	// Mouse position globals
@@ -584,6 +586,16 @@ async function main() {
 		},
 	});
 
+
+	const allocPassPipeline = device.createComputePipeline({
+		label: "Compute shader count stage pipeline",
+		layout: computePipelineLayout,
+		compute: {
+			module: computeModule,
+			entryPoint: "alloc",
+		},
+	});
+
 	//-------------------------------------------------------------------------
 	// Init Data unified
 	//-------------------------------------------------------------------------
@@ -671,13 +683,19 @@ async function main() {
 	const cellIndices = new Uint32Array(size);
 
 
-	const cellIndicesHelperBuffer = device.createBuffer({
+	const cellIndicesBuffer = device.createBuffer({
 		label: "Helper Buffer to store cell indices for each boid",
 		size: cellIndices.byteLength,
 		usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
 	});
 		
-	device.queue.writeBuffer(cellIndicesHelperBuffer, 0, cellIndices);
+	const cellIndicesResults = device.createBuffer({
+		label: "A buffer used to check to results of the count stage",
+		size: cellIndices.byteLength,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+
+	device.queue.writeBuffer(cellIndicesBuffer, 0, cellIndices);
 
 	// helper buffer for sorting the boids
 	// contains vec4 of 32 bit items
@@ -705,13 +723,15 @@ async function main() {
 	});
 
 
-	/*
+	
 	const cellCountersResults = device.createBuffer({
 		label: "A buffer used to check to results of the count stage",
 		size: cellCountersStorageBuffer.byteLength,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 	});
-	*/
+	
+
+
 	
 
 	device.queue.writeBuffer(cellCountersHelperBuffer, 0, cellCountersStorageBuffer);
@@ -739,7 +759,7 @@ async function main() {
 				resource: { buffer: uniformBuffer } 
 			}, {
 				binding: 5,
-				resource: { buffer: cellIndicesHelperBuffer }
+				resource: { buffer: cellIndicesBuffer }
 			}, {
 				binding: 6,
 				resource: { buffer: cellCountersHelperBuffer }
@@ -765,7 +785,7 @@ async function main() {
 				resource: { buffer: uniformBuffer }
 			}, {
 				binding: 5,
-				resource: { buffer: cellIndicesHelperBuffer }
+				resource: { buffer: cellIndicesBuffer }
 			}, {
 				binding: 6,
 				resource: { buffer: cellCountersHelperBuffer }
@@ -866,6 +886,19 @@ async function main() {
 		}),
 	};
 
+	const allocComputePassDescriptor = {
+		label: "Simulation alloc  compute pass",
+		/*
+		...(canTimestamp && {
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 2,
+				endOfPassWriteIndex: 3,
+			}
+		}),
+		*/
+	};
+
 	//-------------------------------------------------------------------------
 	// Frame function
 	//-------------------------------------------------------------------------
@@ -894,15 +927,26 @@ async function main() {
 
 
 		// Count /////////////////////////////////////////////////////////////
+
+		const countWorkgroups = Math.ceil(kNumObjects / COUNT_WORKGROUP_SIZE);
 		encoder.clearBuffer(cellCountersHelperBuffer);
 		const countComputePass = encoder.beginComputePass(countComputePassDescriptor);
 		countComputePass.setPipeline(countPassPipeline);
 		countComputePass.setBindGroup(0, computeBindGroups[step % 2]);
-		countComputePass.dispatchWorkgroups(workgroupCount);
+		countComputePass.dispatchWorkgroups(countWorkgroups);
 		countComputePass.end();
 		///////////////////////////////////////////////////////////////////////
 
-
+		//---------------------------------------------------------------------
+		// alloc
+		//---------------------------------------------------------------------
+		
+		const allocWorkgroups = 1;
+		const allocComputePass = encoder.beginComputePass(allocComputePassDescriptor);
+		allocComputePass.setPipeline(allocPassPipeline);
+		allocComputePass.setBindGroup(0, computeBindGroups[step % 2]);
+		allocComputePass.dispatchWorkgroups(allocWorkgroups);
+		allocComputePass.end();
 
 
 
@@ -1008,29 +1052,40 @@ async function main() {
 
 
 
-		/*
+		///*
 		// Attempt to read cell counters
 		if (cellCountersResults.mapState === 'unmapped') {
 			encoder.copyBufferToBuffer(cellCountersHelperBuffer, 0, cellCountersResults, 0, cellCountersResults.size);
 		}
-		*/
+		//*/
+
+		if (cellIndicesResults.mapState === 'unmapped') {
+			encoder.copyBufferToBuffer(cellIndicesBuffer, 0, cellIndicesResults, 0, cellIndicesResults.size);
+		}
 
 
 		device.queue.submit([encoder.finish()]);
 
 
-		/*
-		if (resultBuffer.mapState === 'unmapped') {
+		///*
+		if (cellCountersResults.mapState === 'unmapped') {
 			cellCountersResults.mapAsync(GPUMapMode.READ).then(() => {
 				const cells = new Uint32Array(cellCountersResults.getMappedRange());
 				console.log(cells);
 				cellCountersResults.unmap();
 			});
 		}
-		*/
+		//*/
 
+		if (cellIndicesResults.mapState === 'unmapped') {
+			cellIndicesResults.mapAsync(GPUMapMode.READ).then(() => {
+				const cells = new Uint32Array(cellIndicesResults.getMappedRange());
+				console.log(cells);
+				cellIndicesResults.unmap();
+			});
+		}
 
-
+		console.log(cellIndicesResults);
 
 
 

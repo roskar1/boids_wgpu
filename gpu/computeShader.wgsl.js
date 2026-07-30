@@ -2,6 +2,7 @@
 
 export const WORKGROUP_SIZE = 256;
 
+export const COUNT_WORKGROUP_SIZE = 32;
 
 export const COMPUTE_SHADER_CODE =
 `
@@ -29,6 +30,7 @@ export const COMPUTE_SHADER_CODE =
 		indexWithinCell : u32,
 	};
 
+
 	struct cellStorageHelperStruct {
 		cellStartIndex : u32,
 		cellEndIndex : u32,
@@ -53,14 +55,10 @@ export const COMPUTE_SHADER_CODE =
 
 
 	@group(0) @binding(4) var<uniform> SceneUniforms: sceneUniforms;
-
 	@group(0) @binding(5) var<storage, read_write> cellIndices: array<cellIndexHelperStruct>;
-	// Old binding 6
-	//@group(0) @binding(6) var<storage, read_write> cellContentsArray: array<Boid, totalCellCount>;
-
-	// new binding (6): shared cellCounters
 	@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
-	//@group(0) @binding(6) var<storage, read_write> cellCounters: array<u32, totalCellCount>;
+
+	
 
 
 
@@ -142,12 +140,21 @@ export const COMPUTE_SHADER_CODE =
 
 
 	@compute
-	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
+	@workgroup_size(${COUNT_WORKGROUP_SIZE}, 1, 1)
 	fn count(input: computeInput) {
 		let i = input.id.x;
+
+		
+
 		let cell = getCell(inputPositions[i]);
-		atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
-		//cellCounters[cell]++;
+		let num = atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
+		
+		cellIndices[i].cell = cell;
+		//cellIndices[i].indexWithinCell = cellCounters[cell];
+		//atomicStore(&cellIndices[i].indexWithinCell, cellCounters[cell]);
+		//cellIndices[i].indexWithinCell = atomicLoad(&cellCounters[cell]);
+
+		cellIndices[i].indexWithinCell = num;
 	}
 
 	
@@ -161,6 +168,21 @@ export const COMPUTE_SHADER_CODE =
 
 		return xCell + (yCell * gridEdgeCount);
 	}	
+
+
+
+	@compute
+	@workgroup_size(${COUNT_WORKGROUP_SIZE}, 1, 1)
+	fn alloc(input: computeInput) {
+		let i = input.id.x;
+		if (i == 0) {
+			for (var j = 1; j < totalCellCount; j++) {
+				atomicAdd(&cellCounters[j], atomicLoad(&cellCounters[j - 1]));
+			}
+		}
+	}
+
+
 
 
 
@@ -184,42 +206,6 @@ export const COMPUTE_SHADER_CODE =
 
 
 	/*
-	// Do this once per boid
-	@compute
-	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
-	fn count(input: computeInput) {
-		let i = input.id.x;
-		let cell = getCell(inputPositions[i]);
-
-		cellIndices[i].cell = cell;
-		cellIndices[i].indexWithinCell = atomicLoad(&cellCounters[cell]);
-		atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
-		//share cell counters with vertex shader for opacity measurements
-	}
-
-
-	fn getCell(v: vec2u) -> u32 {
-		let xPosition = v.x;
-		let yPosition = v.y;
-
-		// Use only log safe values for this
-		let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
-		let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
-
-		return xCell + (yCell * gridEdgeCount);
-	}	
-
-
-
-
-
-
-
-
-
-
-
-
 
 	// Do this once per cell
 	// If workgroup size is the number of cells this could work
@@ -236,6 +222,17 @@ export const COMPUTE_SHADER_CODE =
 		cellStorage[i].count = cellCount;
 		prefixSum += cellCount;
 	}
+
+	*/
+
+
+
+
+
+
+
+
+	/*
 
 	// Do this once per boid
 	@compute
@@ -264,6 +261,7 @@ export const COMPUTE_SHADER_CODE =
 
 		return xCell + (yCell * gridEdgeCount);
 	}	
+
 	*/
 
 	fn rand_sine(p: vec2f) -> f32 {
