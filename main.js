@@ -4,8 +4,17 @@
 import { VERTEX_SHADER_CODE } from './gpu/vertexShader.wgsl.js';
 import { COMPUTE_SHADER_CODE } from './gpu/computeShader.wgsl.js';
 import { WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
-
 import { COUNT_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
+import { ALLOC_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
+
+
+
+
+
+
+
+
+
 
 // Rolling average implemented as a fixed-size array circular buffer
 class NonNegativeRollingAverage {
@@ -34,21 +43,33 @@ class NonNegativeRollingAverage {
 
 // Feature Flags
 let RENDER_PRIMITIVE = false;
+let RENDER_GRID = false;
 
 // Button Functions
-function updateButton(buttonElement) {
+function updateBtn1(buttonElement) {
 	buttonElement.classList.toggle('active');
-	console.log("button updated");
+	//console.log("button updated");
 	RENDER_PRIMITIVE = !RENDER_PRIMITIVE;
 }
 
-window.updateButton = updateButton;
+
+function updateBtn2(buttonElement) {
+	buttonElement.classList.toggle('active');
+	//console.log("button updated");
+	RENDER_GRID = !RENDER_GRID;
+}
+
+window.updateBtn1 = updateBtn1;
+window.updateBtn2 = updateBtn2;
 
 
 
 
-
-
+//-----------------------------------------------------------------------------
+// Export variables
+//-----------------------------------------------------------------------------
+//const gridEdge = 32.0; //old
+const gridEdge = 32.0;
 
 
 // New refactor: wrap everything in async main
@@ -113,7 +134,7 @@ async function main() {
 	//-----------------------------------------------------------------------------
 
 	// Simulation globals
-	const kNumObjects = 500000; //2100000
+	const kNumObjects = 1000000; //2100000
 	//const WORKGROUP_SIZE = 256;
 
 	// Mouse position globals
@@ -161,6 +182,7 @@ async function main() {
 	// compute: xxx (ms)
 	const updateAverage = new NonNegativeRollingAverage();
 	const countAverage = new NonNegativeRollingAverage();
+	const allocAverage = new NonNegativeRollingAverage();
 	const drawBoidAverage = new NonNegativeRollingAverage();
 	const drawGridAverage = new NonNegativeRollingAverage();
 	const computeAverage = new NonNegativeRollingAverage();
@@ -176,6 +198,7 @@ async function main() {
 		computePass ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
 		update ${canTimestamp ? `${updateAverage.get().toFixed(1)} ms` : 'N/A'} 
 		count ${canTimestamp ? `${countAverage.get().toFixed(1)} ms` : 'N/A'} 
+		alloc ${canTimestamp ? `${allocAverage.get().toFixed(1)} us` : 'N/A'} 
 		renderPass ${canTimestamp ? `${renderAverage.get().toFixed(1)} ms` : 'N/A'} 
 		draw boid ${canTimestamp ? `${drawBoidAverage.get().toFixed(1)} ms` : 'N/A'} 
 		draw grid ${canTimestamp ? `${drawGridAverage.get().toFixed(1)} ms` : 'N/A'} 
@@ -285,10 +308,11 @@ async function main() {
 
 	//console.log("3. Initializing Miscellaneous variables...");
 
-	//0: mouseX, 1: mouseY, 2: mouseZoom, 3: fOffsetX, 4: fOffsetY, 5: cellDensity
-	const sceneUniforms = new Float32Array(5);
+	//0: mouseX, 1: mouseY, 2: mouseZoom, 3: fOffsetX, 4: fOffsetY, 5: cellAmount, 6: numBoids
+	const sceneUniforms = new Float32Array(7);
 	sceneUniforms[2] = scale;
-	//sceneUniforms[5] = gridEdgeCount;
+	sceneUniforms[5] = gridEdge;
+	sceneUniforms[6] = kNumObjects;
 
 	// This stores SceneUniforms
 	const uniformBuffer = device.createBuffer({
@@ -308,7 +332,7 @@ async function main() {
 		// An array of query results
 		const querySet = device.createQuerySet({
 			type: 'timestamp',
-			count: 8,
+			count: 10,
 		});
 
 		// Buffer to convert the querySet into accessible data
@@ -543,17 +567,21 @@ async function main() {
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: { type: "storage" }
 		}, {
-			binding: 4, // Mouse GPU Pos
+			binding: 4, // SceneUniforms
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: {}
 		}, {
-			binding: 5, // Helper Buffer for cell data
+			binding: 5, // cellIndices
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: { type: "storage" }
 		}, {
 			binding: 6, // Buffer for cellCounters
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: { type: "storage" }
+		}, {
+			binding: 7, // cellData
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: {type: "storage" }
 		}]
 	});
 
@@ -592,7 +620,9 @@ async function main() {
 		layout: computePipelineLayout,
 		compute: {
 			module: computeModule,
-			entryPoint: "alloc",
+			//entryPoint: "alloc",
+			//entryPoint: "salloc",
+			entryPoint: "naive_scan",
 		},
 	});
 
@@ -649,9 +679,9 @@ async function main() {
 		})
 	];
 
-	//for (let i = 0; i < size; ++i) { initialPositions[i] = rand(0, uintMax); }
+	for (let i = 0; i < size; ++i) { initialPositions[i] = rand(0, uintMax); }
 	
-	for	(let i = 0; i < size; ++i) { initialPositions[i] = rand(U_INT_MAX / 4, 3 * (U_INT_MAX / 4)); }
+	//for	(let i = 0; i < size; ++i) { initialPositions[i] = rand(U_INT_MAX / 4, 3 * (U_INT_MAX / 4)); }
 
 	device.queue.writeBuffer(positionStorageBuffers[0], 0, initialPositions);
 
@@ -674,8 +704,9 @@ async function main() {
 
 	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000, 100000); }
 
-	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000.0, 100000.0); }
-	
+	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-1000000.0, 1000000.0); }
+	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-10.0, 10.0); }
+
 	device.queue.writeBuffer(velocityStorageBuffers[0], 0, initialVelocities);
 
 
@@ -690,7 +721,7 @@ async function main() {
 	});
 		
 	const cellIndicesResults = device.createBuffer({
-		label: "A buffer used to check to results of the count stage",
+		label: "A buffer used to check to cellIndices",
 		size: cellIndices.byteLength,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 	});
@@ -711,7 +742,7 @@ async function main() {
 	device.queue.writeBuffer(cellContentsHelperBuffer, 0, cellContents);
 	*/
 
-	const edgeCount = 16;
+	const edgeCount = sceneUniforms[5];
 	const totalCellCount = edgeCount * edgeCount;
 	const cellCountersStorageBuffer = new Uint32Array(totalCellCount);
 
@@ -730,11 +761,27 @@ async function main() {
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 	});
 	
-
-
-	
-
 	device.queue.writeBuffer(cellCountersHelperBuffer, 0, cellCountersStorageBuffer);
+
+
+
+
+	// Times 2 instead of 3 if not including count
+	const cellData = new Uint32Array(totalCellCount * 3);
+	const cellDataBuffer = device.createBuffer({
+		label: "Storage for start, end, and (potentially) count data",
+		size: cellData.byteLength,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+	});
+	device.queue.writeBuffer(cellDataBuffer, 0, cellData);
+
+
+	const cellDataResults = device.createBuffer({
+		label: "A buffer to check results of alloc stage",
+		size: cellData.byteLength,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+	
 
 
 	// Bind Groups
@@ -763,6 +810,9 @@ async function main() {
 			}, {
 				binding: 6,
 				resource: { buffer: cellCountersHelperBuffer }
+			}, {
+				binding: 7,
+				resource: { buffer: cellDataBuffer }
 			}],
 		}),
 		device.createBindGroup({
@@ -789,6 +839,9 @@ async function main() {
 			}, {
 				binding: 6,
 				resource: { buffer: cellCountersHelperBuffer }
+			}, {
+				binding: 7,
+				resource: { buffer: cellDataBuffer }
 			}],
 		}),
 	];
@@ -843,8 +896,8 @@ async function main() {
 		...(canTimestamp && { // Conditional object property!
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 4,
-				endOfPassWriteIndex: 5,
+				beginningOfPassWriteIndex: 6, //4
+				endOfPassWriteIndex: 7, //5
 			},
 		}),
 	};
@@ -858,8 +911,8 @@ async function main() {
 		...(canTimestamp && { // Conditional object property!
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 6,
-				endOfPassWriteIndex: 7,
+				beginningOfPassWriteIndex: 8, //6
+				endOfPassWriteIndex: 9, //7
 			},
 		}),
 	};
@@ -888,15 +941,13 @@ async function main() {
 
 	const allocComputePassDescriptor = {
 		label: "Simulation alloc  compute pass",
-		/*
 		...(canTimestamp && {
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 2,
-				endOfPassWriteIndex: 3,
+				beginningOfPassWriteIndex: 4,
+				endOfPassWriteIndex: 5,
 			}
 		}),
-		*/
 	};
 
 	//-------------------------------------------------------------------------
@@ -908,13 +959,11 @@ async function main() {
 	let multisampleTexture;
 
 	// Combined Render and Compute
-	// The reason we unified this is because submitting multiple command 
-	// encoders is inefficient and can cause the vertex shader to operate on 
-	// unprocessed data. 
 	function frame(now) {
 
-
+		//---------------------------------------------------------------------
 		// Compute
+		//---------------------------------------------------------------------
 		const encoder = device.createCommandEncoder();
 		const computePass = encoder.beginComputePass(computePassDescriptor);
 		computePass.setPipeline(computePipeline);
@@ -925,9 +974,9 @@ async function main() {
 		computePass.end();
 
 
-
-		// Count /////////////////////////////////////////////////////////////
-
+		//---------------------------------------------------------------------
+		// Count
+		//---------------------------------------------------------------------
 		const countWorkgroups = Math.ceil(kNumObjects / COUNT_WORKGROUP_SIZE);
 		encoder.clearBuffer(cellCountersHelperBuffer);
 		const countComputePass = encoder.beginComputePass(countComputePassDescriptor);
@@ -935,13 +984,12 @@ async function main() {
 		countComputePass.setBindGroup(0, computeBindGroups[step % 2]);
 		countComputePass.dispatchWorkgroups(countWorkgroups);
 		countComputePass.end();
-		///////////////////////////////////////////////////////////////////////
 
 		//---------------------------------------------------------------------
 		// alloc
-		//---------------------------------------------------------------------
-		
-		const allocWorkgroups = 1;
+		//---------------------------------------------------------------------		
+		//const allocWorkgroups = 1;
+		const allocWorkgroups = Math.ceil(gridEdge * gridEdge / ALLOC_WORKGROUP_SIZE);
 		const allocComputePass = encoder.beginComputePass(allocComputePassDescriptor);
 		allocComputePass.setPipeline(allocPassPipeline);
 		allocComputePass.setBindGroup(0, computeBindGroups[step % 2]);
@@ -1017,24 +1065,26 @@ async function main() {
 
 
 
+		if (RENDER_GRID) {
 
+			// Quick multisample texture construction
+			gridRenderPassDescriptor.colorAttachments[0].view = 
+				multisampleTexture.createView();
+			gridRenderPassDescriptor.colorAttachments[0].resolveTarget = 
+				canvasTexture.createView();
 
-		// Quick multisample texture construction
-		gridRenderPassDescriptor.colorAttachments[0].view = 
-			multisampleTexture.createView();
-		gridRenderPassDescriptor.colorAttachments[0].resolveTarget = 
-			canvasTexture.createView();
+			// Grid Render Pass <-------------------------------------------------
+			const gridRenderPass = encoder.beginRenderPass(gridRenderPassDescriptor);
+			gridRenderPass.setPipeline(vertexPipelineGrid);
+			gridRenderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			gridRenderPass.setVertexBuffer(0, gridVertexBuffer);
+			// Temporarily draw the vertices
+			// hardcoded grid edge count
+			let numCells = sceneUniforms[5] ** 2;
+			gridRenderPass.draw(gridVertices.length / 2, numCells);
+			gridRenderPass.end();
 
-		// Grid Render Pass <-------------------------------------------------
-		const gridRenderPass = encoder.beginRenderPass(gridRenderPassDescriptor);
-		gridRenderPass.setPipeline(vertexPipelineGrid);
-		gridRenderPass.setBindGroup(0, vertexBindGroups[step % 2]);
-		gridRenderPass.setVertexBuffer(0, gridVertexBuffer);
-		// Temporarily draw the vertices
-		gridRenderPass.draw(gridVertices.length / 2, 256);
-		gridRenderPass.end();
-
-
+		}
 
 		// This takes the results of the query and puts them in the buffer
 		if (canTimestamp) {
@@ -1063,6 +1113,9 @@ async function main() {
 			encoder.copyBufferToBuffer(cellIndicesBuffer, 0, cellIndicesResults, 0, cellIndicesResults.size);
 		}
 
+		if (cellDataResults.mapState === 'unmapped') {
+			encoder.copyBufferToBuffer(cellDataBuffer, 0, cellDataResults, 0, cellDataResults.size);
+		}
 
 		device.queue.submit([encoder.finish()]);
 
@@ -1071,7 +1124,7 @@ async function main() {
 		if (cellCountersResults.mapState === 'unmapped') {
 			cellCountersResults.mapAsync(GPUMapMode.READ).then(() => {
 				const cells = new Uint32Array(cellCountersResults.getMappedRange());
-				console.log(cells);
+				//console.log(`Cell Counters: ${cells}`);
 				cellCountersResults.unmap();
 			});
 		}
@@ -1080,12 +1133,19 @@ async function main() {
 		if (cellIndicesResults.mapState === 'unmapped') {
 			cellIndicesResults.mapAsync(GPUMapMode.READ).then(() => {
 				const cells = new Uint32Array(cellIndicesResults.getMappedRange());
-				console.log(cells);
+				//console.log(`Cell Indices: (cell, indexWithinCell): ${cells}`);
 				cellIndicesResults.unmap();
 			});
 		}
 
-		console.log(cellIndicesResults);
+		if (cellDataResults.mapState === 'unmapped') {
+			cellDataResults.mapAsync(GPUMapMode.READ).then(() => {
+				const ret = new Uint32Array(cellDataResults.getMappedRange());
+				//console.log(`Cell Data: (start, end, count): ${ret}`);
+				cellDataResults.unmap();
+			});
+		}
+		//console.log(cellIndicesResults);
 
 
 
@@ -1094,23 +1154,33 @@ async function main() {
 		// reading on the times will only arrive every other frame
 		if (canTimestamp && resultBuffer.mapState === 'unmapped') {
 			resultBuffer.mapAsync(GPUMapMode.READ).then(() => {
+				//times are returned in nanoseconds
 				const times = new BigUint64Array(resultBuffer.getMappedRange());
 
 				let updateTime = Number(times[1] - times[0]);
 				let countTime = Number(times[3] - times[2]);
+				let allocTime = Number(times[5] - times[4]);
 
-				let drawBoidTime = Number(times[5] - times[4]);
-				let drawGridTime = Number(times[7] - times[6]);
+				let drawBoidTime = Number(times[7] - times[6]);
+				let drawGridTime = Number(times[9] - times[8]);
 
-				let computeTime = updateTime + countTime;
+				let computeTime = updateTime + countTime + allocTime;
 				let renderTime = drawBoidTime + drawGridTime;
 
 				let gpuTime = computeTime + renderTime;
 
 				updateAverage.addSample(updateTime / 1000000);
 				countAverage.addSample(countTime / 1000000);
+				// ms
+				//allocAverage.addSample(allocTime / 1000000);
+				//us
+				allocAverage.addSample(allocTime / 1000);
 				drawBoidAverage.addSample(drawBoidTime / 1000000);
-				drawGridAverage.addSample(drawGridTime / 1000000);
+				if (RENDER_GRID) {
+					drawGridAverage.addSample(drawGridTime / 1000000);
+				} else {
+					drawGridAverage.addSample(0);
+				}
 				computeAverage.addSample(computeTime / 1000000);
 				renderAverage.addSample(renderTime / 1000000);
 				gpuAverage.addSample(gpuTime / 1000000);
@@ -1136,8 +1206,17 @@ async function main() {
 		frame();
 
 		//console.log(`Step: ${step}`);
-		requestAnimationFrame(renderLoop);
+		// This function blazes through the queue
+
+		//requestAnimationFrame(renderLoop);
+
+
+		//setInterval(renderLoop, 16);
+
 	}
+
+
+	setInterval(renderLoop, 60);
 
 
 

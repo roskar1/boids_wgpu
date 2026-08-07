@@ -4,7 +4,6 @@ export const VERTEX_SHADER_CODE =
 `
 	const UINTMAX : f32 = 4294967295;
 	const S_INT_MAX = 2147483647;
-	const numBoids = 5000000; // 1 mil
 
 	struct VertexInput {
 		@builtin(instance_index) instanceIndex: u32,
@@ -27,6 +26,8 @@ export const VERTEX_SHADER_CODE =
 		zoom : f32,
 		offsetX : f32,
 		offsetY : f32,
+		cellAmount : f32,
+		numBoids : f32,
 	};
 
 
@@ -85,7 +86,7 @@ export const VERTEX_SHADER_CODE =
 	@vertex
 	fn vertexGridPass(input: VertexInput) -> VertexOutput {
 	
-		let gridEdge : u32 = 16;
+		let gridEdge : u32 = u32(SceneUniforms.cellAmount);
 		// u32 division is automatically truncated towards 0
 		let scaleFactor : u32 = u32(UINTMAX) / gridEdge;
 
@@ -95,7 +96,7 @@ export const VERTEX_SHADER_CODE =
 		let Y = i / gridEdge;
 
 		// The number 15k here represents the density represented by the maximum opacity
-		var density = 2 * (numBoids / f32(gridEdge * gridEdge));
+		var density = 2 * (SceneUniforms.numBoids / f32(gridEdge * gridEdge));
 		var opacity: f32 = clamp(f32(cellCounters[i]) / density, 0, 1.0);
 
 		var offset: vec2u = (vec2u(X, Y)) * scaleFactor;

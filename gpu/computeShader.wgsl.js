@@ -1,8 +1,8 @@
 // gpu/computeShader.wgsl.js
 
 export const WORKGROUP_SIZE = 256;
-
 export const COUNT_WORKGROUP_SIZE = 32;
+export const ALLOC_WORKGROUP_SIZE = 32;
 
 export const COMPUTE_SHADER_CODE =
 `
@@ -16,6 +16,8 @@ export const COMPUTE_SHADER_CODE =
 		zoom : f32,
 		offsetX : f32,
 		offsetY : f32,
+		cellAmount: f32,
+		numBoids: f32,
 	};
 
 	struct Boid {
@@ -32,41 +34,29 @@ export const COMPUTE_SHADER_CODE =
 
 
 	struct cellStorageHelperStruct {
-		cellStartIndex : u32,
-		cellEndIndex : u32,
+		startIndex : u32,
+		endIndex : u32,
 		count : u32,
 	};
 
-	struct cellContents { //Dynamically sized arrays must be at the end of structs in wgsl
-		// count : u32,
-		particles: array<Boid>,
-	};
-
-	// Temporary grid size
-	const gridEdgeCount = 16; //<-----------------------------------------------
-	const totalCellCount = gridEdgeCount * gridEdgeCount;
 	const U_INT_MAX = 4294967295;
+	const cellCount : u32 = 1024;
 
 	@group(0) @binding(0) var<storage, read> inputPositions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read_write> outputPositions: array<vec2u>;
-
 	@group(0) @binding(2) var<storage, read> inputVelocities: array<vec2f>;
 	@group(0) @binding(3) var<storage, read_write> outputVelocities: array<vec2f>;
 
 
 	@group(0) @binding(4) var<uniform> SceneUniforms: sceneUniforms;
 	@group(0) @binding(5) var<storage, read_write> cellIndices: array<cellIndexHelperStruct>;
-	@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>, totalCellCount>;
+	@group(0) @binding(6) var<storage, read_write> cellCounters: array<atomic<u32>>;
+
+
+	//new 
+	@group(0) @binding(7) var<storage, read_write> cellData: array<cellStorageHelperStruct>;
 
 	
-
-
-
-
-
-
-
-
 
 
 
@@ -142,44 +132,149 @@ export const COMPUTE_SHADER_CODE =
 	@compute
 	@workgroup_size(${COUNT_WORKGROUP_SIZE}, 1, 1)
 	fn count(input: computeInput) {
-		let i = input.id.x;
+		// Occurs once per boid
+		let thid : u32 = input.id.x;
 
+		// This solves bug where num accumulated past boid count; indexing 
+		// out of inputPositions array
+		if (thid >= arrayLength(&inputPositions)) {
+			return;
+		}
+
+		let cell : u32 = getCell(inputPositions[thid]);
+		let num : u32 = atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
 		
-
-		let cell = getCell(inputPositions[i]);
-		let num = atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
-		
-		cellIndices[i].cell = cell;
-		//cellIndices[i].indexWithinCell = cellCounters[cell];
-		//atomicStore(&cellIndices[i].indexWithinCell, cellCounters[cell]);
-		//cellIndices[i].indexWithinCell = atomicLoad(&cellCounters[cell]);
-
-		cellIndices[i].indexWithinCell = num;
+		cellIndices[thid].cell = cell;
+		cellIndices[thid].indexWithinCell = num;
 	}
+
+	
+
 
 	
 	fn getCell(v: vec2u) -> u32 {
 		let xPosition = v.x;
 		let yPosition = v.y;
+		
+		let gridEdgeCount = SceneUniforms.cellAmount;
 
-		// Use only log safe values for this
-		let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
-		let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
+		//let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
+		//let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
 
-		return xCell + (yCell * gridEdgeCount);
+
+		let xCell = select(xPosition >> (32 - u32(log2(gridEdgeCount))), 0, gridEdgeCount == 1);
+		let yCell = select(yPosition >> (32 - u32(log2(gridEdgeCount))), 0, gridEdgeCount == 1);
+		
+		return xCell + (yCell * u32(gridEdgeCount));
 	}	
 
 
 
+	/*
 	@compute
 	@workgroup_size(${COUNT_WORKGROUP_SIZE}, 1, 1)
 	fn alloc(input: computeInput) {
+		// All this does is perform the prefix sum operation and puts the 
+		// running total in place of the density in the cellCounters array
 		let i = input.id.x;
-		if (i == 0) {
-			for (var j = 1; j < totalCellCount; j++) {
-				atomicAdd(&cellCounters[j], atomicLoad(&cellCounters[j - 1]));
-			}
+		let totalCellCount : f32 = SceneUniforms.cellAmount * SceneUniforms.cellAmount;
+
+		// running total
+		// This variable needs to be an atomic placed in an array or workgroup buffer for access to all threads
+		var prefixSum : u32 = 0u;
+
+		var cellDensity = atomicLoad(&cellCounters[j]);
+				
+		// Assign startIndex to the current value of prefix sum
+		cellData[j].startIndex = prefixSum;
+		prefixSum += cellDensity;
+		cellData[j].endIndex = prefixSum - 1; //the minus 1 is because of 0 based indexing
+		cellData[j].count = cellDensity;
+
+		//atomicAdd(&cellCounters[j], atomicLoad(&cellCounters[j - 1]));
 		}
+	}
+	*/
+
+
+	// Size of array: 8192 bytes
+	// temporary array for the prefix sum computation
+	var<workgroup> temp: array<u32, cellCount * 2>;
+
+
+	// Hillis and Steele (1986) scan algorithm
+
+	@compute
+	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
+	fn naive_scan(input: computeInput) {
+		let thid : u32 = input.id.x; //thread ID must be u32
+		var pout : u32 = 0u; 
+		var pin : u32 = 1u;
+		let n : u32 = cellCount;
+
+		// input/output data from SRAM: an array of atomic u32s
+		// cellCounters
+
+		// Load input into shared memory
+		// exclusive for the sake of the tutorial
+
+		// set the first element to 0 or shift right
+		if (thid > 0) {
+			temp[pout * n + thid] = atomicLoad(&cellCounters[thid - 1u]);
+		} else {
+			temp[pout * n + thid] = 0u;
+		}
+
+		// sync threads before beginning
+		workgroupBarrier();
+
+		for (var offset: u32 = 1; offset < n; offset *= 2) {
+			// Swap double buffer
+			pout = 1 - pout;
+			pin = 1 - pin;
+
+			if (thid >= offset) {
+				temp[pout * n + thid] = temp[pin * n + thid] + temp[pin * n + thid - offset];
+			} else {
+				temp[pout * n + thid] = temp[pin * n + thid];
+			}
+
+			workgroupBarrier();
+		}
+
+		// Write output
+		cellData[thid].startIndex = temp[pout * n + thid];
+		cellData[thid].endIndex = cellData[thid].startIndex + atomicLoad(&cellCounters[thid]);
+		cellData[thid].count = atomicLoad(&cellCounters[thid]);
+		
+	}
+
+	@compute
+	@workgroup_size(1, 1, 1)
+	// Single Threaded Alloc
+	fn salloc(input: computeInput) {
+		let i = input.id.x;
+		let totalCellCount : f32 = SceneUniforms.cellAmount * SceneUniforms.cellAmount;
+		var prefixSum : u32 = 0u;
+
+
+		for (var j = 0; j < i32(totalCellCount); j++) {
+			var cellDensity : u32 = atomicLoad(&cellCounters[j]);
+				
+			cellData[j].startIndex = prefixSum;
+			prefixSum += cellDensity;
+			// use -1 for 0-based indexing
+			// use clamp function to ensure no negative indices and no outside of array indices
+			cellData[j].endIndex = clamp((prefixSum - 1), 0u, u32(SceneUniforms.numBoids - 1));
+			cellData[j].count = cellDensity;
+		}
+
+		/*
+		for (var j : i32 = 1; j < i32(totalCellCount); j++) {
+			//atomicAdd(&cellCounters[j], atomicLoad(&cellCounters[j - 1]));
+
+		}
+		*/
 	}
 
 

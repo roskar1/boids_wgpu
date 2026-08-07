@@ -54,8 +54,6 @@
 
 /*Button Styling*/
 .feature-btn {
-	 position: absolute;                                                         
-     top: 200px;                                                                 
      left: 20px;                                                                 
      color: #555555;
 	 background-color: rgba(0, 0, 0, 0.7);                                       
@@ -72,5 +70,17 @@
 	color: #ffffff;
 	text-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
 }
+
+#btn-1 {
+	position: absolute;
+	top: 209px;
+}
+
+#btn-2 {
+	position: absolute;
+	top: 232px;
+}
+
+
 
 
