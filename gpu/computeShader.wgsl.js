@@ -2,7 +2,7 @@
 
 export const WORKGROUP_SIZE = 256;
 export const COUNT_WORKGROUP_SIZE = 32;
-export const ALLOC_WORKGROUP_SIZE = 32;
+export const ALLOC_WORKGROUP_SIZE = 64;
 
 export const COMPUTE_SHADER_CODE =
 `
@@ -135,8 +135,6 @@ export const COMPUTE_SHADER_CODE =
 		// Occurs once per boid
 		let thid : u32 = input.id.x;
 
-		// This solves bug where num accumulated past boid count; indexing 
-		// out of inputPositions array
 		if (thid >= arrayLength(&inputPositions)) {
 			return;
 		}
@@ -153,17 +151,13 @@ export const COMPUTE_SHADER_CODE =
 
 	
 	fn getCell(v: vec2u) -> u32 {
-		let xPosition = v.x;
-		let yPosition = v.y;
+		let xPosition: u32 = v.x;
+		let yPosition: u32 = v.y;
 		
-		let gridEdgeCount = SceneUniforms.cellAmount;
+		let gridEdgeCount: f32 = SceneUniforms.cellAmount;
 
-		//let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
-		//let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
-
-
-		let xCell = select(xPosition >> (32 - u32(log2(gridEdgeCount))), 0, gridEdgeCount == 1);
-		let yCell = select(yPosition >> (32 - u32(log2(gridEdgeCount))), 0, gridEdgeCount == 1);
+		let xCell: u32 = select(xPosition >> (32u - u32(log2(gridEdgeCount))), 0u, gridEdgeCount == 1);
+		let yCell: u32 = select(yPosition >> (32u - u32(log2(gridEdgeCount))), 0u, gridEdgeCount == 1);
 		
 		return xCell + (yCell * u32(gridEdgeCount));
 	}	
@@ -202,34 +196,24 @@ export const COMPUTE_SHADER_CODE =
 	var<workgroup> temp: array<u32, cellCount * 2>;
 
 
-	// Hillis and Steele (1986) scan algorithm
+	// Kogge-Stone (1973) Inclusive Scan Algorithm Implementation
 
 	@compute
 	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
 	fn naive_scan(input: computeInput) {
-		let thid : u32 = input.id.x; //thread ID must be u32
+		let thid : u32 = input.id.x;
 		var pout : u32 = 0u; 
 		var pin : u32 = 1u;
-		let n : u32 = cellCount;
+		let n : u32 = arrayLength(&cellCounters);
+		let count: u32 = atomicLoad(&cellCounters[thid]);
 
-		// input/output data from SRAM: an array of atomic u32s
-		// cellCounters
-
-		// Load input into shared memory
-		// exclusive for the sake of the tutorial
-
-		// set the first element to 0 or shift right
-		if (thid > 0) {
-			temp[pout * n + thid] = atomicLoad(&cellCounters[thid - 1u]);
-		} else {
-			temp[pout * n + thid] = 0u;
+		if (thid < n) {
+			temp[pout * n + thid] = count;
 		}
 
-		// sync threads before beginning
 		workgroupBarrier();
 
 		for (var offset: u32 = 1; offset < n; offset *= 2) {
-			// Swap double buffer
 			pout = 1 - pout;
 			pin = 1 - pin;
 
@@ -243,11 +227,124 @@ export const COMPUTE_SHADER_CODE =
 		}
 
 		// Write output
-		cellData[thid].startIndex = temp[pout * n + thid];
-		cellData[thid].endIndex = cellData[thid].startIndex + atomicLoad(&cellCounters[thid]);
-		cellData[thid].count = atomicLoad(&cellCounters[thid]);
-		
+		if (thid < n) { // thread guard
+			cellData[thid].endIndex = temp[pout * n + thid];
+			cellData[thid].startIndex = temp[pout * n + thid] - count;
+			cellData[thid].count = count;
+		}
 	}
+
+
+
+	// Blelloch (1990) Sum Scan Algorithm Implementation
+
+	var<workgroup> temp_2: array<u32, cellCount>;
+
+	@compute
+	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
+	fn prescan(input: computeInput) {
+	
+		// Setup
+		let thid : u32 = input.id.x;
+		var offset : u32 = 1u;
+		let n = cellCount; 
+		
+		let idx1: u32 = 2u * thid;
+		let idx2: u32 = 2u * thid + 1u;
+
+		temp_2[idx1] = atomicLoad(&cellCounters[idx1]);
+		temp_2[idx2] = atomicLoad(&cellCounters[idx2]);
+
+
+
+
+
+
+
+
+
+
+
+
+		// Up-Sweep
+		for (var d : u32 = n >> 1u; d > 0u; d >>= 1u) {
+			workgroupBarrier();
+			if (thid < d) {
+				let ai : u32 = offset * (2u * thid + 1u) - 1u;
+				let bi : u32 = offset * (2u * thid + 2u) - 1u;
+				temp_2[bi] += temp_2[ai];
+			}
+			offset *= 2u;
+		}
+
+		// Clear root
+		if (thid == 0u) {
+			temp_2[n - 1] = 0u;
+		}
+
+		workgroupBarrier();
+
+
+
+
+
+
+
+
+
+
+
+
+		// Down-Sweep
+		for (var d : u32 = 1; d < n; d *= 2u) {
+			offset >>= 1u;
+			workgroupBarrier();
+			if (thid < d) {
+				let ai : u32 = offset * (2u * thid + 1u) - 1u;
+				let bi : u32 = offset * (2u * thid + 2u) - 1u;
+				let t : u32 = temp_2[ai];
+				temp_2[ai] = temp_2[bi];
+				temp_2[bi] += t;
+			}
+		}
+		workgroupBarrier();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		// write output
+		if (idx1 < n) {
+			cellData[idx1].startIndex = temp_2[idx1];
+		}
+		if (idx2 < n) {
+			cellData[idx2].startIndex = temp_2[idx2];
+		}
+
+		/*
+		cellData[2 * thid].startIndex = temp_2[2 * thid];
+		cellData[2 * thid + 1].startIndex = temp_2[2 * thid + 1];
+		*/
+
+		cellData[2 * thid].count = atomicLoad(&cellCounters[2 * thid]);
+		// This writes out of bounds of the cellData array and reads out of bounds of the cellCounters array
+		//cellData[2 * thid + 1].count = atomicLoad(&cellCounters[2 * thid + 1]);
+	}
+
+
+
+
+
+
 
 	@compute
 	@workgroup_size(1, 1, 1)

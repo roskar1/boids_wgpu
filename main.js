@@ -69,7 +69,7 @@ window.updateBtn2 = updateBtn2;
 // Export variables
 //-----------------------------------------------------------------------------
 //const gridEdge = 32.0; //old
-const gridEdge = 32.0;
+const gridEdge = 8.0;
 
 
 // New refactor: wrap everything in async main
@@ -134,7 +134,7 @@ async function main() {
 	//-----------------------------------------------------------------------------
 
 	// Simulation globals
-	const kNumObjects = 1000000; //2100000
+	const kNumObjects = 8; //2100000
 	//const WORKGROUP_SIZE = 256;
 
 	// Mouse position globals
@@ -623,6 +623,7 @@ async function main() {
 			//entryPoint: "alloc",
 			//entryPoint: "salloc",
 			entryPoint: "naive_scan",
+			//entryPoint: "prescan",
 		},
 	});
 
@@ -704,8 +705,8 @@ async function main() {
 
 	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000, 100000); }
 
-	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-1000000.0, 1000000.0); }
-	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-10.0, 10.0); }
+	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-1000000.0, 1000000.0); }
+	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-10.0, 10.0); }
 
 	device.queue.writeBuffer(velocityStorageBuffers[0], 0, initialVelocities);
 
@@ -1141,7 +1142,7 @@ async function main() {
 		if (cellDataResults.mapState === 'unmapped') {
 			cellDataResults.mapAsync(GPUMapMode.READ).then(() => {
 				const ret = new Uint32Array(cellDataResults.getMappedRange());
-				//console.log(`Cell Data: (start, end, count): ${ret}`);
+				console.log(`Cell Data: (start, end, count): ${ret}`);
 				cellDataResults.unmap();
 			});
 		}
