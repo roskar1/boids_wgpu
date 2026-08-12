@@ -1,15 +1,25 @@
 // gpu/computeShader.wgsl.js
 
-export const WORKGROUP_SIZE = 256;
+export const WORKGROUP_SIZE = 32;
 export const COUNT_WORKGROUP_SIZE = 32;
-export const ALLOC_WORKGROUP_SIZE = 64;
+export const ALLOC_WORKGROUP_SIZE = 32;
+export const FILL_WORKGROUP_SIZE = 32;
 
 export const COMPUTE_SHADER_CODE =
 `
+	enable subgroups;
+
 	struct computeInput {
 		@builtin(global_invocation_id) id: vec3u,
 	};
-			
+
+	struct allocInput {
+		@builtin(global_invocation_id) id: vec3u,
+		@builtin(subgroup_invocation_id) sg_lane: u32,
+		@builtin(subgroup_size) sg_size: u32,
+		@builtin(subgroup_id) sg_id: u32,
+	}
+
 	struct sceneUniforms {
 		mouseX : f32,
 		mouseY : f32,
@@ -18,6 +28,11 @@ export const COMPUTE_SHADER_CODE =
 		offsetY : f32,
 		cellAmount: f32,
 		numBoids: f32,
+	};
+
+	struct sums {
+		startIndex: u32,
+		previousSum: u32,
 	};
 
 	struct Boid {
@@ -42,9 +57,9 @@ export const COMPUTE_SHADER_CODE =
 	const U_INT_MAX = 4294967295;
 	const cellCount : u32 = 1024;
 
-	@group(0) @binding(0) var<storage, read> inputPositions: array<vec2u>;
+	@group(0) @binding(0) var<storage, read_write> inputPositions: array<vec2u>;
 	@group(0) @binding(1) var<storage, read_write> outputPositions: array<vec2u>;
-	@group(0) @binding(2) var<storage, read> inputVelocities: array<vec2f>;
+	@group(0) @binding(2) var<storage, read_write> inputVelocities: array<vec2f>;
 	@group(0) @binding(3) var<storage, read_write> outputVelocities: array<vec2f>;
 
 
@@ -55,6 +70,7 @@ export const COMPUTE_SHADER_CODE =
 
 	//new 
 	@group(0) @binding(7) var<storage, read_write> cellData: array<cellStorageHelperStruct>;
+	@group(0) @binding(8) var<storage, read_write> SUMS: sums;
 
 	
 
@@ -112,12 +128,74 @@ export const COMPUTE_SHADER_CODE =
 	@compute 
 	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 	fn computeMainFloat32(input: computeInput) {
-		let i = input.id.x;
-		// Convert to float
-		let newPosition : vec2f = vec2f(inputPositions[i]) + inputVelocities[i];
+		let thid: u32 = input.id.x;
+
+		// Macros
+		let TARGET_SPEED: f32 = 1310000.0f; //10 for slow
+		let SEPARATION: f32 = 100.0f; 
+		let SEPARATION_RADIUS: f32 = 6000000.0f; // 6,000,000 multiplied by a factor of 65k
+		let COHESION: f32 = 5.0f;
+		let ALIGNMENT: f32 = 10.0f;
+		let RESOLVE: f32 = 1.0f;
+
+		// Read
+		let numNeighbors: u32 = cellData[cellIndices[thid].cell].count;
+		var cell: u32 = cellIndices[thid].cell;
+		var startIndex: u32 = cellData[cell].startIndex;
+		var pos: vec2f = vec2f(outputPositions[thid]);
+		var vel: vec2f = outputVelocities[thid];
+		var otherPos: vec2f;
+		var otherVel: vec2f;
+		var count: u32;
+		var sepForce: f32;
+		var dist: vec2f;
+		var magDist: f32;
+		var sumPos: vec2f; //Use float to avoid overflow. Use iterative mean algorithm
+		var t: i32; //incrementor for iterative average computation
+		var sumVel: vec2f;
+		
+		// enter a for loop. Loop for cellData[cellIndices[thid].cell].count
+
+		for (var i: u32 = 0; i < numNeighbors; i++) {
+			otherPos = vec2f(outputPositions[startIndex + i]);
+			otherVel = outputVelocities[startIndex + i];
+				
+			dist = otherPos - pos;
+			magDist = length(dist);
+				
+			count += 1;
+			sumPos += otherPos;
+			sumVel += otherVel;
+
+			/*			
+			if (magDist < SEPARATION_RADIUS) {
+				// Linear separation
+				sepForce = SEPARATION_RADIUS - magDist;
+				vel += dist * (sepForce * -SEPARATION);
+			}
+			*/
+			
+			
+				
+			// Inverse Separation
+			sepForce = 10 / (magDist + 1);
+			vel += dist * (sepForce * -SEPARATION);
+			
+		}
+
+		// Cohesion
+
+		// Alignment
+
+		// Rescale Velocity
+		vel += (((normalize(vel) * TARGET_SPEED) - vel) * RESOLVE);
+
+		// Actual Update
+		pos += vel;
+
 		// Wrap around and convert back to u32
-		outputPositions[i] = vec2u(fmod_f32(newPosition, U_INT_MAX));
-		outputVelocities[i] = inputVelocities[i];
+		inputPositions[thid] = vec2u(fmod_f32(pos, U_INT_MAX));
+		inputVelocities[thid] = vel;
 	}
 
 	// Override modulo to floored modulo function for unsigned canvas wrapping
@@ -160,7 +238,55 @@ export const COMPUTE_SHADER_CODE =
 		let yCell: u32 = select(yPosition >> (32u - u32(log2(gridEdgeCount))), 0u, gridEdgeCount == 1);
 		
 		return xCell + (yCell * u32(gridEdgeCount));
-	}	
+	}
+
+
+	@compute
+	@workgroup_size(${FILL_WORKGROUP_SIZE}, 1, 1)
+	fn fill(input: computeInput) {
+		// read boids into dest array in sorted order
+		// For future: write updated boids to src array
+		let thid: u32 = input.id.x;
+		let idx: u32 = cellData[cellIndices[thid].cell].startIndex + cellIndices[thid].indexWithinCell;
+		outputPositions[idx] = inputPositions[thid];
+		outputVelocities[idx] = inputVelocities[thid];
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -236,110 +362,111 @@ export const COMPUTE_SHADER_CODE =
 
 
 
-	// Blelloch (1990) Sum Scan Algorithm Implementation
+	// Blelloch (1990) Work-Efficient Sum Scan Algorithm Implementation
 
-	var<workgroup> temp_2: array<u32, cellCount>;
+	// max length is 1024
+	var<workgroup> tmp: array<u32, cellCount>;
 
 	@compute
 	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
 	fn prescan(input: computeInput) {
 	
 		// Setup
-		let thid : u32 = input.id.x;
+		let thid: u32 = input.id.x;
+		let sidx: u32 = SUMS.startIndex; 
+		let psum: u32 = SUMS.previousSum;
 		var offset : u32 = 1u;
-		let n = cellCount; 
+		let n: u32 = ${ALLOC_WORKGROUP_SIZE} * 2; // 2 items per thread
+
+		let load_idx1: u32 = (2u * thid) + sidx;
+		let load_idx2: u32 = (2u * thid) + 1u + sidx;
 		
 		let idx1: u32 = 2u * thid;
 		let idx2: u32 = 2u * thid + 1u;
 
-		temp_2[idx1] = atomicLoad(&cellCounters[idx1]);
-		temp_2[idx2] = atomicLoad(&cellCounters[idx2]);
-
-
-
-
-
-
-
-
-
-
-
+		tmp[idx1] = atomicLoad(&cellCounters[load_idx1]);
+		tmp[idx2] = atomicLoad(&cellCounters[load_idx2]);
 
 		// Up-Sweep
 		for (var d : u32 = n >> 1u; d > 0u; d >>= 1u) {
+
 			workgroupBarrier();
+
 			if (thid < d) {
-				let ai : u32 = offset * (2u * thid + 1u) - 1u;
-				let bi : u32 = offset * (2u * thid + 2u) - 1u;
-				temp_2[bi] += temp_2[ai];
+				let ai : u32 = offset * (idx1 + 1u) - 1u;
+				let bi : u32 = offset * (idx2 + 1u) - 1u;
+				tmp[bi] += tmp[ai];
 			}
 			offset *= 2u;
 		}
 
-		// Clear root
-		if (thid == 0u) {
-			temp_2[n - 1] = 0u;
-		}
-
 		workgroupBarrier();
 
-
-
-
-
-
-
-
-
-
-
+		// Update and Clear root
+		if (thid == 0u) {
+			SUMS.previousSum += tmp[n - 1u];
+			tmp[n - 1u] = 0u;
+		}
 
 		// Down-Sweep
 		for (var d : u32 = 1; d < n; d *= 2u) {
 			offset >>= 1u;
 			workgroupBarrier();
 			if (thid < d) {
-				let ai : u32 = offset * (2u * thid + 1u) - 1u;
-				let bi : u32 = offset * (2u * thid + 2u) - 1u;
-				let t : u32 = temp_2[ai];
-				temp_2[ai] = temp_2[bi];
-				temp_2[bi] += t;
+				let ai : u32 = offset * (idx1 + 1u) - 1u;
+				let bi : u32 = offset * (idx2 + 1u) - 1u;
+				let t : u32 = tmp[ai];
+				tmp[ai] = tmp[bi];
+				tmp[bi] += t;
 			}
 		}
 		workgroupBarrier();
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 		// write output
-		if (idx1 < n) {
-			cellData[idx1].startIndex = temp_2[idx1];
-		}
-		if (idx2 < n) {
-			cellData[idx2].startIndex = temp_2[idx2];
-		}
+			cellData[load_idx1].startIndex = tmp[idx1] + psum;
+			cellData[load_idx2].startIndex = tmp[idx2] + psum;
 
-		/*
-		cellData[2 * thid].startIndex = temp_2[2 * thid];
-		cellData[2 * thid + 1].startIndex = temp_2[2 * thid + 1];
-		*/
+			cellData[load_idx1].count = atomicLoad(&cellCounters[load_idx1]);
+			cellData[load_idx2].count = atomicLoad(&cellCounters[load_idx2]);
 
-		cellData[2 * thid].count = atomicLoad(&cellCounters[2 * thid]);
-		// This writes out of bounds of the cellData array and reads out of bounds of the cellCounters array
-		//cellData[2 * thid + 1].count = atomicLoad(&cellCounters[2 * thid + 1]);
+			cellData[load_idx1].endIndex = cellData[load_idx1].startIndex + cellData[load_idx1].count;
+			cellData[load_idx2].endIndex = cellData[load_idx2].startIndex + cellData[load_idx2].count;
 	}
 
+
+	// SubgroupExclusiveAdd version
+
+	/*
+	var <workgroup> subgroup_sums: array<u32, 8>
+
+	@compute
+	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
+	fn sub_alloc(input: allocInput) {
+		let thid: u32 = input.id.x;
+		let val: u32 = atomicLoad(&cellCounters[thid]);
+
+		var local_prefix = subgroupExclusiveAdd(val);
+
+		if (sg_lane == sg_size - 1u) {
+			subgroup_sums[sg_id] = local_prefix + val;
+		}
+
+		workgroupBarrier();
+
+		var sg_offset = 0u;
+		if (sg_id == 0u && sg_lane < 8u) {
+			let total_scan = subgroupExclusiveAdd(subgroup_sums[sg_lane]);
+			subgroup_sums[sg_lane] = total_scan;
+		}
+
+		workgroupBarrier();
+
+		// write output
+		cellData
+
+
+	}
+	*/	
 
 
 

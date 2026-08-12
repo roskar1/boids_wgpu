@@ -6,7 +6,7 @@ import { COMPUTE_SHADER_CODE } from './gpu/computeShader.wgsl.js';
 import { WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 import { COUNT_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 import { ALLOC_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
-
+import { FILL_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 
 
 
@@ -42,8 +42,8 @@ class NonNegativeRollingAverage {
 
 
 // Feature Flags
-let RENDER_PRIMITIVE = false;
-let RENDER_GRID = false;
+let RENDER_PRIMITIVE = true;
+let RENDER_GRID = true;
 
 // Button Functions
 function updateBtn1(buttonElement) {
@@ -98,7 +98,9 @@ async function main() {
 	const canTimestamp = adapter.features.has('timestamp-query');
 	const device = await adapter.requestDevice({
 		requiredFeatures: [
+			'subgroups',
 			...(canTimestamp ? ['timestamp-query'] : []),
+			
 		],
 	});
 
@@ -128,13 +130,12 @@ async function main() {
 	document.addEventListener("mousedown", onMouseDown);
 	document.addEventListener("mouseup", onMouseUp);
 
-
 	//-----------------------------------------------------------------------------
 	// Global Variable Setup
 	//-----------------------------------------------------------------------------
 
 	// Simulation globals
-	const kNumObjects = 8; //2100000
+	const kNumObjects = 100; //2100000
 	//const WORKGROUP_SIZE = 256;
 
 	// Mouse position globals
@@ -183,6 +184,7 @@ async function main() {
 	const updateAverage = new NonNegativeRollingAverage();
 	const countAverage = new NonNegativeRollingAverage();
 	const allocAverage = new NonNegativeRollingAverage();
+	const fillAverage = new NonNegativeRollingAverage();
 	const drawBoidAverage = new NonNegativeRollingAverage();
 	const drawGridAverage = new NonNegativeRollingAverage();
 	const computeAverage = new NonNegativeRollingAverage();
@@ -196,9 +198,10 @@ async function main() {
 		frameLog.innerText = 
 		`gpu ${canTimestamp ? `${gpuAverage.get().toFixed(1)} ms (${(1 / (gpuAverage.get() / 1000)).toFixed(0)} fps)` : 'N/A'} 
 		computePass ${canTimestamp ? `${computeAverage.get().toFixed(1)} ms` : 'N/A'} 
-		update ${canTimestamp ? `${updateAverage.get().toFixed(1)} ms` : 'N/A'} 
 		count ${canTimestamp ? `${countAverage.get().toFixed(1)} ms` : 'N/A'} 
 		alloc ${canTimestamp ? `${allocAverage.get().toFixed(1)} us` : 'N/A'} 
+		fill ${canTimestamp ? `${fillAverage.get().toFixed(1)} ms` : 'N/A'} 
+		update ${canTimestamp ? `${updateAverage.get().toFixed(1)} ms` : 'N/A'} 
 		renderPass ${canTimestamp ? `${renderAverage.get().toFixed(1)} ms` : 'N/A'} 
 		draw boid ${canTimestamp ? `${drawBoidAverage.get().toFixed(1)} ms` : 'N/A'} 
 		draw grid ${canTimestamp ? `${drawGridAverage.get().toFixed(1)} ms` : 'N/A'} 
@@ -332,7 +335,7 @@ async function main() {
 		// An array of query results
 		const querySet = device.createQuerySet({
 			type: 'timestamp',
-			count: 10,
+			count: 12,
 		});
 
 		// Buffer to convert the querySet into accessible data
@@ -553,7 +556,7 @@ async function main() {
 		entries: [{
 			binding: 0, // input position
 			visibility: GPUShaderStage.COMPUTE,
-			buffer: { type: "read-only-storage" }
+			buffer: { type: "storage" }
 		}, {
 			binding: 1, // output position
 			visibility: GPUShaderStage.COMPUTE,
@@ -561,7 +564,7 @@ async function main() {
 		}, {
 			binding: 2, // input velocity
 			visibility: GPUShaderStage.COMPUTE,
-			buffer: { type: "read-only-storage" }
+			buffer: { type: "storage" }
 		}, {
 			binding: 3, // output velocity
 			visibility: GPUShaderStage.COMPUTE,
@@ -582,7 +585,11 @@ async function main() {
 			binding: 7, // cellData
 			visibility: GPUShaderStage.COMPUTE,
 			buffer: {type: "storage" }
-		}]
+		}, {
+			binding: 8, //SUMS
+			visibility: GPUShaderStage.COMPUTE,
+			buffer: {type: "storage" }
+		}],
 	});
 
 	computePipelineLayout = device.createPipelineLayout({
@@ -622,8 +629,17 @@ async function main() {
 			module: computeModule,
 			//entryPoint: "alloc",
 			//entryPoint: "salloc",
-			entryPoint: "naive_scan",
-			//entryPoint: "prescan",
+			//entryPoint: "naive_scan",
+			entryPoint: "prescan",
+		},
+	});
+
+	const fillPassPipeline = device.createComputePipeline({
+		label: "Compute shader fill stage pipeline",
+		layout: computePipelineLayout,
+		compute: {
+			module: computeModule,
+			entryPoint: "fill",
 		},
 	});
 
@@ -703,10 +719,10 @@ async function main() {
 		})
 	];
 
-	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000, 100000); }
+	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-100000, 100000); }
 
 	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-1000000.0, 1000000.0); }
-	for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-10.0, 10.0); }
+	//for (let i = 0; i < size; ++i) { initialVelocities[i] = rand(-10.0, 10.0); }
 
 	device.queue.writeBuffer(velocityStorageBuffers[0], 0, initialVelocities);
 
@@ -785,6 +801,19 @@ async function main() {
 	
 
 
+	const SUMS = device.createBuffer({
+		label: "Auxiliary array for prefix sum",
+		size: 8, // 2 u32 values 
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+	});
+
+	const sumsResults = device.createBuffer({
+		label: "A buffer to check results of SUMS",
+		size: 8,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+
+
 	// Bind Groups
 	computeBindGroups = [
 		device.createBindGroup({
@@ -814,6 +843,9 @@ async function main() {
 			}, {
 				binding: 7,
 				resource: { buffer: cellDataBuffer }
+			}, {
+				binding: 8,
+				resource: { buffer: SUMS }
 			}],
 		}),
 		device.createBindGroup({
@@ -843,6 +875,9 @@ async function main() {
 			}, {
 				binding: 7,
 				resource: { buffer: cellDataBuffer }
+			}, {
+				binding: 8,
+				resource: { buffer: SUMS }
 			}],
 		}),
 	];
@@ -885,8 +920,51 @@ async function main() {
 	];
 
 	
-	// If the feature exists, we'll add a timestampWrites section to the 
-	// descriptor
+	const countPassDescriptor = {
+		label: "Simulation count compute pass",
+		...(canTimestamp && {
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 0, //2
+				endOfPassWriteIndex: 1, //3
+			}
+		}),
+	};
+
+	const allocPassDescriptor = {
+		label: "Simulation alloc compute pass",
+		...(canTimestamp && {
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 2, //4
+				endOfPassWriteIndex: 3, //5
+			}
+		}),
+	};
+
+	const fillPassDescriptor = {
+		label: "Simulation fill compute pass",
+		...(canTimestamp && {
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 4,
+				endOfPassWriteIndex: 5,
+			}
+		}),
+	};
+
+	const updatePassDescriptor = {
+		label: "Simulation Compute Pass",
+		...(canTimestamp && {
+			timestampWrites: {
+				querySet,
+				beginningOfPassWriteIndex: 6, //0
+				endOfPassWriteIndex: 7, //1
+			}
+		}),
+	};
+
+
 	const vertexRenderPassDescriptor = {
 		label: "Canvas renderPass",
 		colorAttachments: [{
@@ -897,8 +975,8 @@ async function main() {
 		...(canTimestamp && { // Conditional object property!
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 6, //4
-				endOfPassWriteIndex: 7, //5
+				beginningOfPassWriteIndex: 8, //6
+				endOfPassWriteIndex: 9, //7
 			},
 		}),
 	};
@@ -912,42 +990,9 @@ async function main() {
 		...(canTimestamp && { // Conditional object property!
 			timestampWrites: {
 				querySet,
-				beginningOfPassWriteIndex: 8, //6
-				endOfPassWriteIndex: 9, //7
+				beginningOfPassWriteIndex: 10, //8
+				endOfPassWriteIndex: 11, //9
 			},
-		}),
-	};
-
-	const computePassDescriptor = {
-		label: "Simulation Compute Pass",
-		...(canTimestamp && {
-			timestampWrites: {
-				querySet,
-				beginningOfPassWriteIndex: 0,
-				endOfPassWriteIndex: 1,
-			}
-		}),
-	};
-
-	const countComputePassDescriptor = {
-		label: "Simulation count compute pass",
-		...(canTimestamp && {
-			timestampWrites: {
-				querySet,
-				beginningOfPassWriteIndex: 2,
-				endOfPassWriteIndex: 3,
-			}
-		}),
-	};
-
-	const allocComputePassDescriptor = {
-		label: "Simulation alloc  compute pass",
-		...(canTimestamp && {
-			timestampWrites: {
-				querySet,
-				beginningOfPassWriteIndex: 4,
-				endOfPassWriteIndex: 5,
-			}
 		}),
 	};
 
@@ -958,46 +1003,63 @@ async function main() {
 
 	let step = 0;
 	let multisampleTexture;
-
+	const temp = new Uint32Array(2);
+	
+	
 	// Combined Render and Compute
 	function frame(now) {
 
-		//---------------------------------------------------------------------
-		// Compute
-		//---------------------------------------------------------------------
 		const encoder = device.createCommandEncoder();
-		const computePass = encoder.beginComputePass(computePassDescriptor);
-		computePass.setPipeline(computePipeline);
-		computePass.setBindGroup(0, computeBindGroups[step % 2]);
-		// With 256 workgroups and 1mil partices, this dispatches 3907 workgroups
-		const workgroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
-		computePass.dispatchWorkgroups(workgroupCount);
-		computePass.end();
-
 
 		//---------------------------------------------------------------------
 		// Count
 		//---------------------------------------------------------------------
 		const countWorkgroups = Math.ceil(kNumObjects / COUNT_WORKGROUP_SIZE);
 		encoder.clearBuffer(cellCountersHelperBuffer);
-		const countComputePass = encoder.beginComputePass(countComputePassDescriptor);
+		const countComputePass = encoder.beginComputePass(countPassDescriptor);
 		countComputePass.setPipeline(countPassPipeline);
-		countComputePass.setBindGroup(0, computeBindGroups[step % 2]);
+		countComputePass.setBindGroup(0, computeBindGroups[0]);
 		countComputePass.dispatchWorkgroups(countWorkgroups);
 		countComputePass.end();
 
 		//---------------------------------------------------------------------
-		// alloc
+		// Alloc
 		//---------------------------------------------------------------------		
-		//const allocWorkgroups = 1;
-		const allocWorkgroups = Math.ceil(gridEdge * gridEdge / ALLOC_WORKGROUP_SIZE);
-		const allocComputePass = encoder.beginComputePass(allocComputePassDescriptor);
-		allocComputePass.setPipeline(allocPassPipeline);
-		allocComputePass.setBindGroup(0, computeBindGroups[step % 2]);
-		allocComputePass.dispatchWorkgroups(allocWorkgroups);
-		allocComputePass.end();
+		//encoder.clearBuffer(SUMS);
 
+		for (let i = 0; i < ((gridEdge * gridEdge) / (ALLOC_WORKGROUP_SIZE * 2)); i++) {
+			device.queue.writeBuffer(SUMS, 0, new Uint32Array(2))
+			temp[0] = (i * (ALLOC_WORKGROUP_SIZE * 2));
+			device.queue.writeBuffer(SUMS, 0, temp, 0, 1); //only write to the first entry of SUMS
 
+			const allocComputePass = encoder.beginComputePass(allocPassDescriptor);
+			allocComputePass.setPipeline(allocPassPipeline);
+			allocComputePass.setBindGroup(0, computeBindGroups[0]);
+			allocComputePass.dispatchWorkgroups(1);
+			allocComputePass.end();
+		}
+
+		//---------------------------------------------------------------------
+		// Fill
+		//---------------------------------------------------------------------
+		const fillWorkgroups = Math.ceil(kNumObjects / FILL_WORKGROUP_SIZE);
+		const fillComputePass = encoder.beginComputePass(fillPassDescriptor);
+		fillComputePass.setPipeline(fillPassPipeline);
+		fillComputePass.setBindGroup(0, computeBindGroups[0]);
+		fillComputePass.dispatchWorkgroups(fillWorkgroups);
+		fillComputePass.end();
+		
+
+		//---------------------------------------------------------------------
+		// Update
+		//---------------------------------------------------------------------
+		const computePass = encoder.beginComputePass(updatePassDescriptor);
+		computePass.setPipeline(computePipeline);
+		computePass.setBindGroup(0, computeBindGroups[0]);
+		// With 256 workgroups and 1mil partices, this dispatches 3907 workgroups
+		const workgroupCount = Math.ceil(kNumObjects / WORKGROUP_SIZE);
+		computePass.dispatchWorkgroups(workgroupCount);
+		computePass.end();
 
 
 
@@ -1049,12 +1111,12 @@ async function main() {
 		if (RENDER_PRIMITIVE) {
 			// small	
 			renderPass.setPipeline(vertexPipelineSmall);
-			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			renderPass.setBindGroup(0, vertexBindGroups[0]);
 			renderPass.draw(1, kNumObjects);
 		} else {
 			// normal
 			renderPass.setPipeline(vertexPipeline);
-			renderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			renderPass.setBindGroup(0, vertexBindGroups[0]);
 			renderPass.setVertexBuffer(0, vertexBuffer);
 			renderPass.draw(3, kNumObjects);
 		}
@@ -1077,7 +1139,7 @@ async function main() {
 			// Grid Render Pass <-------------------------------------------------
 			const gridRenderPass = encoder.beginRenderPass(gridRenderPassDescriptor);
 			gridRenderPass.setPipeline(vertexPipelineGrid);
-			gridRenderPass.setBindGroup(0, vertexBindGroups[step % 2]);
+			gridRenderPass.setBindGroup(0, vertexBindGroups[0]);
 			gridRenderPass.setVertexBuffer(0, gridVertexBuffer);
 			// Temporarily draw the vertices
 			// hardcoded grid edge count
@@ -1118,13 +1180,20 @@ async function main() {
 			encoder.copyBufferToBuffer(cellDataBuffer, 0, cellDataResults, 0, cellDataResults.size);
 		}
 
+		if (cellDataResults.mapState === 'unmapped') {
+			encoder.copyBufferToBuffer(SUMS, 0, sumsResults, 0, sumsResults.size);
+		}
+
 		device.queue.submit([encoder.finish()]);
 
 
 		///*
+		//const outputL = new Uint32Array(kNumObjects);
+		//const outputS = new Uint32Array(gridEdge * gridEdge);
+
 		if (cellCountersResults.mapState === 'unmapped') {
 			cellCountersResults.mapAsync(GPUMapMode.READ).then(() => {
-				const cells = new Uint32Array(cellCountersResults.getMappedRange());
+				//const cells = new Uint32Array(cellCountersResults.getMappedRange());
 				//console.log(`Cell Counters: ${cells}`);
 				cellCountersResults.unmap();
 			});
@@ -1133,7 +1202,7 @@ async function main() {
 
 		if (cellIndicesResults.mapState === 'unmapped') {
 			cellIndicesResults.mapAsync(GPUMapMode.READ).then(() => {
-				const cells = new Uint32Array(cellIndicesResults.getMappedRange());
+				//const cells = new Uint32Array(cellIndicesResults.getMappedRange());
 				//console.log(`Cell Indices: (cell, indexWithinCell): ${cells}`);
 				cellIndicesResults.unmap();
 			});
@@ -1144,6 +1213,14 @@ async function main() {
 				const ret = new Uint32Array(cellDataResults.getMappedRange());
 				console.log(`Cell Data: (start, end, count): ${ret}`);
 				cellDataResults.unmap();
+			});
+		}
+
+		if (sumsResults.mapState === 'unmapped') {
+			sumsResults.mapAsync(GPUMapMode.READ).then(() => {
+				const ret = new Uint32Array(sumsResults.getMappedRange());
+				console.log(`SUMS: (sidx, presum): ${ret}`);
+				sumsResults.unmap();
 			});
 		}
 		//console.log(cellIndicesResults);
@@ -1158,30 +1235,35 @@ async function main() {
 				//times are returned in nanoseconds
 				const times = new BigUint64Array(resultBuffer.getMappedRange());
 
-				let updateTime = Number(times[1] - times[0]);
-				let countTime = Number(times[3] - times[2]);
-				let allocTime = Number(times[5] - times[4]);
+				let countTime = Number(times[1] - times[0]);
+				let allocTime = Number(times[3] - times[2]);
+				let fillTime = Number(times[5] - times[4]);
+				let updateTime = Number(times[7] - times[6]);
 
-				let drawBoidTime = Number(times[7] - times[6]);
-				let drawGridTime = Number(times[9] - times[8]);
+				let drawBoidTime = Number(times[9] - times[8]);
+				let drawGridTime = Number(times[11] - times[10]);
 
-				let computeTime = updateTime + countTime + allocTime;
+				let computeTime = countTime + allocTime + fillTime + updateTime;
 				let renderTime = drawBoidTime + drawGridTime;
 
 				let gpuTime = computeTime + renderTime;
 
-				updateAverage.addSample(updateTime / 1000000);
 				countAverage.addSample(countTime / 1000000);
 				// ms
 				//allocAverage.addSample(allocTime / 1000000);
+
 				//us
 				allocAverage.addSample(allocTime / 1000);
+				fillAverage.addSample(fillTime / 1000000);
+				updateAverage.addSample(updateTime / 1000000);
+
 				drawBoidAverage.addSample(drawBoidTime / 1000000);
 				if (RENDER_GRID) {
 					drawGridAverage.addSample(drawGridTime / 1000000);
 				} else {
 					drawGridAverage.addSample(0);
 				}
+
 				computeAverage.addSample(computeTime / 1000000);
 				renderAverage.addSample(renderTime / 1000000);
 				gpuAverage.addSample(gpuTime / 1000000);
@@ -1205,23 +1287,19 @@ async function main() {
 		renderScreenText();
 		
 		frame();
-
-		//console.log(`Step: ${step}`);
-		// This function blazes through the queue
-
-		//requestAnimationFrame(renderLoop);
-
-
-		//setInterval(renderLoop, 16);
-
 	}
 
 
+	
 	setInterval(renderLoop, 60);
-
-
-
-	requestAnimationFrame(renderLoop);
+	
+	window.addEventListener('keydown', (event) => {
+		if (event.code === 'Space') {
+			event.preventDefault();
+			//console.log('Space bar pressed!');
+			//renderLoop();		
+		}
+	});
 
 }
 
