@@ -2,7 +2,7 @@
 
 export const WORKGROUP_SIZE = 32;
 export const COUNT_WORKGROUP_SIZE = 32;
-export const ALLOC_WORKGROUP_SIZE = 32;
+export const ALLOC_WORKGROUP_SIZE = 64;
 export const FILL_WORKGROUP_SIZE = 32;
 
 export const COMPUTE_SHADER_CODE =
@@ -15,10 +15,12 @@ export const COMPUTE_SHADER_CODE =
 
 	struct allocInput {
 		@builtin(global_invocation_id) id: vec3u,
+		@builtin(local_invocation_id) l_id: vec3u,
+		@builtin(workgroup_id) wg_id: vec3u,
 		@builtin(subgroup_invocation_id) sg_lane: u32,
 		@builtin(subgroup_size) sg_size: u32,
 		@builtin(subgroup_id) sg_id: u32,
-	}
+	};
 
 	struct sceneUniforms {
 		mouseX : f32,
@@ -47,12 +49,14 @@ export const COMPUTE_SHADER_CODE =
 		indexWithinCell : u32,
 	};
 
-
+	
+	/*
 	struct cellStorageHelperStruct {
 		startIndex : u32,
 		endIndex : u32,
 		count : u32,
 	};
+	*/
 
 	const U_INT_MAX = 4294967295;
 	const cellCount : u32 = 1024;
@@ -69,8 +73,16 @@ export const COMPUTE_SHADER_CODE =
 
 
 	//new 
-	@group(0) @binding(7) var<storage, read_write> cellData: array<cellStorageHelperStruct>;
-	@group(0) @binding(8) var<storage, read_write> SUMS: sums;
+	//@group(0) @binding(7) var<storage, read_write> cellData: array<cellStorageHelperStruct>;
+
+	@group(0) @binding(7) var<storage, read_write> cellData: array<u32>;
+
+
+
+	// contains the total sum of each workgroup attacking the prefix sum problem
+	// size is cells / alloc workgroup size
+	// in block_sums, each index belongs to a workgroup
+	@group(0) @binding(8) var<storage, read_write> block_sums: array<u32>;
 
 	
 
@@ -78,14 +90,6 @@ export const COMPUTE_SHADER_CODE =
 
 
 
-
-
-
-
-
-	// So these can be workgroup buffers
-	//var<storage, read_write> cellCounters: array<u32, totalCellCount>;
-	//var<storage, read_write> cellStorage: array<cellStorageHelperStruct, totalCellCount>;
 
 
 	// workgroup storage is shared by all threads in a workgroup. Therefore it 
@@ -108,23 +112,6 @@ export const COMPUTE_SHADER_CODE =
 	// This buffer can be data optimized as the cell is limited to the variable
 	// totalCellCount which by default is a number between 1 and 256. 
 
-
-
-	// CELLCONTENTSARRAY is another massive storage binding containing a boid
-	// entry of [16 bytes] for every single one of the 1-64 million boids. 
-	// I believe it could be replaced by an index of each boid. Picture this,
-	// The input positions array remains unchanged while a buffer of indices in 
-	// sorted order is maintained. While the input positions may look like this:
-	// [0, 1, 2, 3, 4, ... ],
-	// The cellcontentsarray will look like this:
-	// [3, 4, 2, 0, 1, ... ].
-	// Each value is an index of the boid. In an arbitrary example with startIndex
-	// of 0 and endIndex of 2 for cell 1, boids 3, 4, and 2 are found in that cell spatially, 
-	// The update call then loops from startIndex to endIndex of cellContents, 
-	// for each boid, accessing the boids at those indices in cellContents that 
-	// are found in the ping-ponging buffers
-
-
 	@compute 
 	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
 	fn computeMainFloat32(input: computeInput) {
@@ -139,9 +126,10 @@ export const COMPUTE_SHADER_CODE =
 		let RESOLVE: f32 = 1.0f;
 
 		// Read
-		let numNeighbors: u32 = cellData[cellIndices[thid].cell].count;
 		var cell: u32 = cellIndices[thid].cell;
-		var startIndex: u32 = cellData[cell].startIndex;
+		let numNeighbors: u32 = atomicLoad(&cellCounters[cell]);
+		//var startIndex: u32 = cellData[cell].startIndex;
+		var startIndex: u32 = cellData[cell];
 		var pos: vec2f = vec2f(outputPositions[thid]);
 		var vel: vec2f = outputVelocities[thid];
 		var otherPos: vec2f;
@@ -211,14 +199,14 @@ export const COMPUTE_SHADER_CODE =
 	@workgroup_size(${COUNT_WORKGROUP_SIZE}, 1, 1)
 	fn count(input: computeInput) {
 		// Occurs once per boid
-		let thid : u32 = input.id.x;
+		let thid: u32 = input.id.x;
 
 		if (thid >= arrayLength(&inputPositions)) {
 			return;
 		}
 
-		let cell : u32 = getCell(inputPositions[thid]);
-		let num : u32 = atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
+		let cell: u32 = getCell(inputPositions[thid]);
+		let num: u32 = atomicAdd(&cellCounters[cell], 1u); // Atomic add to avoid race
 		
 		cellIndices[thid].cell = cell;
 		cellIndices[thid].indexWithinCell = num;
@@ -247,7 +235,8 @@ export const COMPUTE_SHADER_CODE =
 		// read boids into dest array in sorted order
 		// For future: write updated boids to src array
 		let thid: u32 = input.id.x;
-		let idx: u32 = cellData[cellIndices[thid].cell].startIndex + cellIndices[thid].indexWithinCell;
+		//let idx: u32 = cellData[cellIndices[thid].cell].startIndex + cellIndices[thid].indexWithinCell;
+		let idx: u32 = cellData[cellIndices[thid].cell] + cellIndices[thid].indexWithinCell;
 		outputPositions[idx] = inputPositions[thid];
 		outputVelocities[idx] = inputVelocities[thid];
 	}
@@ -314,7 +303,7 @@ export const COMPUTE_SHADER_CODE =
 		//atomicAdd(&cellCounters[j], atomicLoad(&cellCounters[j - 1]));
 		}
 	}
-	*/
+	
 
 
 	// Size of array: 8192 bytes
@@ -373,13 +362,11 @@ export const COMPUTE_SHADER_CODE =
 	
 		// Setup
 		let thid: u32 = input.id.x;
-		let sidx: u32 = SUMS.startIndex; 
-		let psum: u32 = SUMS.previousSum;
 		var offset : u32 = 1u;
 		let n: u32 = ${ALLOC_WORKGROUP_SIZE} * 2; // 2 items per thread
 
-		let load_idx1: u32 = (2u * thid) + sidx;
-		let load_idx2: u32 = (2u * thid) + 1u + sidx;
+		let load_idx1: u32 = (2u * thid);
+		let load_idx2: u32 = (2u * thid) + 1u;
 		
 		let idx1: u32 = 2u * thid;
 		let idx2: u32 = 2u * thid + 1u;
@@ -404,7 +391,6 @@ export const COMPUTE_SHADER_CODE =
 
 		// Update and Clear root
 		if (thid == 0u) {
-			SUMS.previousSum += tmp[n - 1u];
 			tmp[n - 1u] = 0u;
 		}
 
@@ -423,8 +409,8 @@ export const COMPUTE_SHADER_CODE =
 		workgroupBarrier();
 
 		// write output
-			cellData[load_idx1].startIndex = tmp[idx1] + psum;
-			cellData[load_idx2].startIndex = tmp[idx2] + psum;
+			cellData[load_idx1].startIndex = tmp[idx1];
+			cellData[load_idx2].startIndex = tmp[idx2];
 
 			cellData[load_idx1].count = atomicLoad(&cellCounters[load_idx1]);
 			cellData[load_idx2].count = atomicLoad(&cellCounters[load_idx2]);
@@ -434,44 +420,134 @@ export const COMPUTE_SHADER_CODE =
 	}
 
 
-	// SubgroupExclusiveAdd version
+	// SubgroupExclusiveAdd version - no memory read/writes
 
-	/*
-	var <workgroup> subgroup_sums: array<u32, 8>
+
+
+	// size of subgroup is 32-64
+	// size of alloc workgroup presently is 32
+
+
+	// Conservative size estimate so that writing out of bounds will not occur, even if the size of a subgroups is 1. 
+	var <workgroup> sg_sums: array<u32, ${ALLOC_WORKGROUP_SIZE}>;
 
 	@compute
 	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
 	fn sub_alloc(input: allocInput) {
-		let thid: u32 = input.id.x;
-		let val: u32 = atomicLoad(&cellCounters[thid]);
+		let g_id: u32 = input.id.x; // global thread invocation id
+		let l_id: u32 = input.l_id.x; // workgroup local thread invocation id
+		let wg_id: u32 = input.wg_id.x; // workgroup invocation id
+		let sg_lane: u32 = input.sg_lane; // thread invocation index within subgroup
+		let sg_size: u32 = input.sg_size; // size of subgroup
+		let sg_id: u32 = input.sg_id; // subgroup index within larger workgroup
 
-		var local_prefix = subgroupExclusiveAdd(val);
+		let n = arrayLength(&cellCounters);
+		let in_range = g_id < n;
 
-		if (sg_lane == sg_size - 1u) {
-			subgroup_sums[sg_id] = local_prefix + val;
+		var val: u32 = 0u;
+		if (in_range) {
+			val = atomicLoad(&cellCounters[g_id]);
+		}
+
+		// exclusive scan within subgroup
+		let sg_prefix: u32 = subgroupExclusiveAdd(val);
+
+		// total sum of the subgroup
+		let sg_sum: u32 = subgroupAdd(val);
+
+		// write subgroup sum to workgroup memory
+		if (sg_lane == 0u) {
+			sg_sums[sg_id] = sg_sum;
 		}
 
 		workgroupBarrier();
 
-		var sg_offset = 0u;
-		if (sg_id == 0u && sg_lane < 8u) {
-			let total_scan = subgroupExclusiveAdd(subgroup_sums[sg_lane]);
-			subgroup_sums[sg_lane] = total_scan;
+		// First thread scans subgroup sums
+
+		// ceiling division
+		let num_sg = (${ALLOC_WORKGROUP_SIZE} + sg_size - 1u) / sg_size;
+		if (l_id == 0u) {
+			var sg_sum_total = 0u;
+			for (var i = 0u; i < num_sg; i += 1u) {
+				let tmp = sg_sums[i];
+				sg_sums[i] = sg_sum_total;
+				sg_sum_total = sg_sum_total + tmp;
+			}
+
+
+			let n_blocks = arrayLength(&block_sums);
+			
+			// again, bounds check on block_sum array
+			if (wg_id < n_blocks) {
+				block_sums[wg_id] = sg_sum_total;
+			}
 		}
 
 		workgroupBarrier();
 
-		// write output
-		cellData
-
-
+		if (in_range) {
+			cellData[g_id].startIndex = sg_sums[sg_id] + sg_prefix;
+			cellData[g_id].endIndex = cellData[g_id].startIndex + val; 
+			cellData[g_id].count = val;
+		}
 	}
-	*/	
 
 
+	/* // see prefixSum.wgsl.js
+	@compute
+	@workgroup_size(${ALLOC_WORKGROUP_SIZE}, 1, 1)
+	fn block_sum_scan(input: allocInput) {
+		let g_id: u32 = input.id.x; // global thread invocation id
+		let l_id: u32 = input.l_id.x; // workgroup local thread invocation id
+		let wg_id: u32 = input.wg_id.x; // workgroup invocation id
+		let sg_lane: u32 = input.sg_lane; // thread invocation index within subgroup
+		let sg_size: u32 = input.sg_size; // size of subgroup
+		let sg_id: u32 = input.sg_id; // subgroup index within larger workgroup
+
+		let n = arrayLength(&block_sums);
+		let in_range = g_id < n;
+
+		var val: u32 = 0u;
+		if (in_range) {
+			val = block_sums[g_id];
+		}
+
+		// exclusive scan within subgroup
+		let sg_prefix: u32 = subgroupExclusiveAdd(val);
+
+		// total sum of the subgroup
+		let sg_sum: u32 = subgroupAdd(val);
+
+		// write subgroup sum to workgroup memory
+		if (sg_lane == 0u) {
+			sg_sums[sg_id] = sg_sum;
+		}
+
+		workgroupBarrier();
+
+		// First thread scans subgroup sums
+
+		// ceiling division
+		let num_sg = (${ALLOC_WORKGROUP_SIZE} + sg_size - 1u) / sg_size;
+		if (l_id == 0u) {
+			var sg_sum_total = 0u;
+			for (var i = 0u; i < num_sg; i += 1u) {
+				let tmp = sg_sums[i];
+				sg_sums[i] = sg_sum_total;
+				sg_sum_total = sg_sum_total + tmp;
+			}
 
 
-
+			let n_blocks = arrayLength(&block_sums);
+			
+			// again, bounds check on block_sum array
+			if (wg_id < n_blocks) {
+				block_sums[wg_id] = sg_sum_total;
+			}
+		}
+	}
+	*/
+	
 
 	@compute
 	@workgroup_size(1, 1, 1)
@@ -500,7 +576,8 @@ export const COMPUTE_SHADER_CODE =
 		}
 		*/
 	}
-
+	
+	*/
 
 
 
@@ -562,28 +639,33 @@ export const COMPUTE_SHADER_CODE =
 		let offset = cellStorage[cell].cellStartIndex + cellIndices[i].indexWithinCell;
 
 		cellContentsArray[offset] = 
-			Boid(
-				inputPositions[i].x,
-				inputPositions[i].y,
-				inputVelocities[i].x,
-				inputVelocities[i].y
-			);
+		cellStorage[i].cellStartIndex = prefixSum;
+		cellStorage[i].cellEndIndex = prefixSum + cellCount;
+		cellStorage[i].count = cellCount;
+		prefixSum += cellCount;
 	}
-
-	fn getCell(v: vec2u) -> u32 {
-		let xPosition = v.x;
-		let yPosition = v.y;
-
-		// Use only log safe values for this
-		let xCell = xPosition >> (32 - u32(log2(gridEdgeCount)));
-		let yCell = yPosition >> (32 - u32(log2(gridEdgeCount)));
-
-		return xCell + (yCell * gridEdgeCount);
-	}	
 
 	*/
 
-	fn rand_sine(p: vec2f) -> f32 {
-		return fract(sin(dot(p, vec2f(12.9898, 4.1414))) * 43758.5453);
-	}
-`;
+
+
+
+
+
+
+
+	/*
+
+	// Do this once per boid
+	@compute
+	@workgroup_size(${WORKGROUP_SIZE}, 1, 1)
+	fn fill(input: computeInput) {
+		let i = input.id.x;
+		let cell = getCell(inputPositions[i]);
+		let offset = cellStorage[cell].cellStartIndex + cellIndices[i].indexWithinCell;
+
+	*/
+
+	`;
+
+

@@ -38,7 +38,7 @@
 
 #firstButton {
 	position: absolute;
-	top: 119px;
+	top: 200px;
 	left: 20px;
 	color: #fff;
 	background-color: rgba(0, 0, 0, 0.7);
@@ -73,12 +73,12 @@
 
 #btn-1 {
 	position: absolute;
-	top: 209px;
+	top: 500px;
 }
 
 #btn-2 {
 	position: absolute;
-	top: 232px;
+	top: 532px;
 }
 
 
