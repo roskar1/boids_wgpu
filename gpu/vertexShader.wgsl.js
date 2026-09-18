@@ -35,6 +35,9 @@ export const VERTEX_SHADER_CODE =
 	@group(0) @binding(1) var<storage, read> velocities: array<vec2f>;
 	@group(0) @binding(2) var<uniform> SceneUniforms: sceneUniforms;
 	@group(0) @binding(3) var<storage> cellCounters: array<u32>;
+	@group(0) @binding(4) var<storage> sblockSumsL1: array<u32>;
+	@group(0) @binding(5) var<storage> sblockSumsL2: array<u32>;
+	@group(0) @binding(6) var<storage> cellData: array<u32>; 
 
 	@vertex
 	fn vertexMain(input: VertexInput) -> VertexOutput {
@@ -95,10 +98,15 @@ export const VERTEX_SHADER_CODE =
 		let X = i % gridEdge;
 		let Y = i / gridEdge;
 
+		/*
 		// The number 15k here represents the density represented by the maximum opacity
 		var density = 2 * (SceneUniforms.numBoids / f32(gridEdge * gridEdge));
 		var opacity: f32 = clamp(f32(cellCounters[i]) / density, 0, 1.0);
+		*/
 
+		var density = 2 * (SceneUniforms.numBoids / f32(gridEdge * gridEdge));
+		var opacity: f32 = clamp(f32(cellCounters[i]) / density, 0, 1.0);
+		
 		var offset: vec2u = (vec2u(X, Y)) * scaleFactor;
 		var offsetWorld: vec2f = worldToScreen(offset);
 

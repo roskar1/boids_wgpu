@@ -1,5 +1,5 @@
 // main.js
-
+//
 // Top-level mandated imports
 import { VERTEX_SHADER_CODE } from './gpu/vertexShader.wgsl.js';
 import { COMPUTE_SHADER_CODE } from './gpu/computeShader.wgsl.js';
@@ -11,13 +11,6 @@ import { ALLOC_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 import { FILL_WORKGROUP_SIZE } from './gpu/computeShader.wgsl.js';
 
 import { WG_SIZE } from './gpu/scan.wgsl.js';
-
-
-
-
-
-
-
 
 
 // Rolling average implemented as a fixed-size array circular buffer
@@ -69,11 +62,13 @@ window.updateBtn2 = updateBtn2;
 
 
 
+
 //-----------------------------------------------------------------------------
 // Export variables
 //-----------------------------------------------------------------------------
-//const gridEdge = 32.0; //old
-const gridEdge = 16.0;
+// max WG_SIZE = 32 is 128 by 128
+// max WG_SIZE = 256 is 4096* 4096
+const gridEdge = 128;
 
 
 // New refactor: wrap everything in async main
@@ -97,14 +92,19 @@ async function main() {
 	if (!adapter) {
 		throw new Error("No appropriate GPUAdapter found.");
 	}
+	if (!adapter.features.has("subgroups")) {
+		throw new Error("Subgroups not available");
+	}
 
-	// Ensure the adapter has time features to track GPU time
+	// Subgroup Size Controls are not available
+
+
+	// Ensure the adapter has requirements
 	const canTimestamp = adapter.features.has('timestamp-query');
 	const device = await adapter.requestDevice({
 		requiredFeatures: [
-			'subgroups',
-			...(canTimestamp ? ['timestamp-query'] : []),
-			
+			['subgroups'],
+			...(canTimestamp ? ['timestamp-query'] : []),	
 		],
 	});
 
@@ -134,12 +134,23 @@ async function main() {
 	document.addEventListener("mousedown", onMouseDown);
 	document.addEventListener("mouseup", onMouseUp);
 
+	let sepslider = document.getElementById("sep-slider");
+	if (!(sepslider instanceof HTMLInputElement)) {
+		throw new Error("Expected Slider - but didn't get one");
+	}
+
+	let sepsliderValue = document.getElementById("sep-slider-value");
+	if (!(sepsliderValue instanceof HTMLParagraphElement)) {
+		throw new Error("Expected Paragraph - but didn't get one");
+	}
+
+
 	//-----------------------------------------------------------------------------
 	// Global Variable Setup
 	//-----------------------------------------------------------------------------
 
 	// Simulation globals
-	const kNumObjects = 10000; //2100000
+	const kNumObjects = 600000; //2100000
 	//const WORKGROUP_SIZE = 256;
 
 	// Mouse position globals
@@ -243,6 +254,11 @@ async function main() {
 	function canvasToGPUY(y) {
 		return (((y / canvas.height) * 2) - 1) / scale;
 	}		
+
+	// Logarithm Helper Function
+	function baseLog(x, base) {
+		return Math.log(x) / Math.log(base);
+	}
 	
 	function onMouseMove(e) {
 		fMouseX = e.clientX;
@@ -313,8 +329,23 @@ async function main() {
 		MOUSE_DOWN = false;
 	}
 
+
+	// Slider functions
+	if (sepslider) {
+		sepslider.oninput = function() {
+			MOUSE_DOWN = false;
+			sepsliderValue.innerText = `${sepslider.value}`;
+		};
+	}
+
+
+
+	// TODO: Construct  resize observer to increase resolution for screens with 
+	// higher DPI. 
+
 	function resizeCanvas() {
-		//if (!this.canvas) return; // ensures canvas exists before resizing
+		if (!canvas) return; // ensures canvas exists before resizing
+		
 		canvas.width = window.innerWidth;
 		canvas.height = window.innerHeight;
 	}
@@ -375,13 +406,10 @@ async function main() {
 	// Init Vertex
 	//-------------------------------------------------------------------------
 
-	let vertexBindGroupLayout;
-	let vertexPipeline;
 	let multisampleCount = 4;
-	
 
 	// Layouts
-	vertexBindGroupLayout = device.createBindGroupLayout({
+	const vertexBindGroupLayout = device.createBindGroupLayout({
 		label: "Vertex Bind Group Layout New",
 		entries: [{
 			binding: 0, // Positions
@@ -399,7 +427,19 @@ async function main() {
 			binding: 3, 
 			visibility: GPUShaderStage.VERTEX,
 			buffer: { type: "read-only-storage" }
-		}]
+		}, {
+			binding: 4,
+			visibility: GPUShaderStage.VERTEX,
+			buffer: { type: "read-only-storage" }
+		}, {
+			binding: 5,
+			visibility: GPUShaderStage.VERTEX,
+			buffer: { type: "read-only-storage" }
+		}, {
+			binding: 6,
+			visibility: GPUShaderStage.VERTEX,
+			buffer: { type: "read-only-storage" }
+		}],
 	});
 
 	const vertexPipelineLayout = device.createPipelineLayout({
@@ -465,7 +505,7 @@ async function main() {
 		code: VERTEX_SHADER_CODE
 	});
 
-	vertexPipeline = device.createRenderPipeline({
+	const vertexPipeline = device.createRenderPipeline({
 		label: "Vertex Pipeline",
 		layout: vertexPipelineLayout,
 		vertex: {
@@ -632,7 +672,7 @@ async function main() {
 		},
 	});
 
-	/*
+	/* Old single threaded/single workgroup prefix phase
 	const allocPassPipeline = device.createComputePipeline({
 		label: "Compute shader count stage pipeline",
 		layout: computePipelineLayout,
@@ -735,8 +775,15 @@ async function main() {
 		})
 	];
 
-	for (let i = 0; i < size; ++i) { initialPositions[i] = rand(0, uintMax); }
-	//for	(let i = 0; i < size; ++i) { initialPositions[i] = rand(U_INT_MAX / 4, 3 * (U_INT_MAX / 4)); }
+	for (let i = 0; i < size; ++i) { 
+		initialPositions[i] = rand(0, uintMax); 
+	}
+
+	/* // For debugging edges
+	for	(let i = 0; i < size; ++i) { 
+		initialPositions[i] = rand(U_INT_MAX / 4, 3 * (U_INT_MAX / 4)); 
+	}
+	*/
 
 	device.queue.writeBuffer(positionStorageBuffers[0], 0, initialPositions);
 
@@ -822,32 +869,67 @@ async function main() {
 		size: cellData.byteLength,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 	});
+	const cellDataResults2 = device.createBuffer({
+		label: "A buffer to check results of alloc stage",
+		size: cellData.byteLength,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
 
 
 	//-------------------------------------------------------------------------
+	const blockSumsL1Size = Math.ceil(totalCellCount / WG_SIZE) * 4;
 	const blockSumsL1 = device.createBuffer({
 		label: "Buffer for block sums 1",
-		size: Math.ceil(totalCellCount / WG_SIZE) * 4,
+		size: blockSumsL1Size,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
 	});
+	const blockSumsL1Results = device.createBuffer({
+		label: "A buffer used to check to cellIndices",
+		size: blockSumsL1Size,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+
+
 
 	const sblockSumsL1 = device.createBuffer({
 		label: "Scanned Buffer for block sums 1",
-		size: Math.ceil(totalCellCount / WG_SIZE) * 4,
+		size: blockSumsL1Size, 
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
+	});
+	const sblockSumsL1Results = device.createBuffer({
+		label: "Scanned Block Sums 1 Buffer",
+		size: blockSumsL1Size,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
 	});
 
+
+
+	const blockSumsL2Size = Math.ceil(totalCellCount / Math.pow(WG_SIZE, 2)) * 4;
 	const blockSumsL2 = device.createBuffer({	
 		label: "Buffer for block sums 2",
-		size: Math.ceil(totalCellCount / Math.pow(WG_SIZE, 2)) * 4,
+		size: blockSumsL2Size,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
 	});
+	const blockSumsL2Results = device.createBuffer({	
+		label: "Buffer for block sums 2",
+		size: blockSumsL2Size,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+
+
 
 	const sblockSumsL2 = device.createBuffer({	
 		label: " Scanned Buffer for block sums 2",
-		size: Math.ceil(totalCellCount / Math.pow(WG_SIZE, 2)) * 4,
+		size: blockSumsL2Size,
 		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE,
 	});
+	const sblockSumsL2Results = device.createBuffer({	
+		label: " Scanned Buffer for block sums 2",
+		size: blockSumsL2Size,
+		usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+	});
+
+
 
 	const dummyBuffer = device.createBuffer({	
 		label: "Buffer for final block sum",
@@ -1014,42 +1096,32 @@ async function main() {
 
 
 
-	const vertexBindGroups = [
-		device.createBindGroup({
-			label: "Vertex Bind Group A",
-			layout: vertexBindGroupLayout,
-			entries: [{
-				binding: 0,
-				resource: { buffer: positionStorageBuffers[0] }
-			}, {
-				binding: 1,
-				resource: { buffer: velocityStorageBuffers[0] }
-			}, {
-				binding: 2,
-				resource: { buffer: uniformBuffer }
-			}, {
-				binding: 3,
-				resource: { buffer: cellCountersBuffer }
-			}],
-		}), 
-		device.createBindGroup({
-			label: "Vertex Bind Group B", 
-			layout: vertexBindGroupLayout,
-			entries: [{
-				binding: 0,
-				resource: { buffer: positionStorageBuffers[1] }
-			}, {
-				binding: 1,
-				resource: { buffer: velocityStorageBuffers[1] }
-			}, {
-				binding: 2,
-				resource: { buffer: uniformBuffer }
-			}, {
-				binding: 3,
-				resource: { buffer: cellCountersBuffer }
-			}],
-		})
-	];
+	const vertexBindGroup = device.createBindGroup({
+		label: "Vertex Bind Group",
+		layout: vertexBindGroupLayout,
+		entries: [{
+			binding: 0,
+			resource: { buffer: positionStorageBuffers[0] }
+		}, {
+			binding: 1,
+			resource: { buffer: velocityStorageBuffers[0] }
+		}, {
+			binding: 2,
+			resource: { buffer: uniformBuffer }
+		}, {
+			binding: 3,
+			resource: { buffer: cellCountersBuffer }
+		}, {	
+			binding: 4,
+			resource: { buffer: sblockSumsL1 }
+		}, {
+			binding: 5,
+			resource: { buffer: sblockSumsL2 }
+		}, {
+			binding: 6,
+			resource: { buffer: cellDataBuffer }
+		}],
+	}); 
 
 	
 	const countPassDescriptor = {
@@ -1208,7 +1280,7 @@ async function main() {
 	
 	
 	// Combined Render and Compute
-	function frame(now) {
+	async function frame(now) {
 
 		const encoder = device.createCommandEncoder();
 
@@ -1235,32 +1307,96 @@ async function main() {
 		allocComputePass.end();
 		*/
 		
-		count = totalCellCount;
-		scanPasses = 0;
-		while (count > 1) {
-			count = Math.ceil(count / WG_SIZE);
-			scanPasses++;
-		}
+		count = totalCellCount; // Currently 16
+		scanPasses = 0; // reset scan passes variable
+		/*
+		Scan once if cell count is at or below to 32 (WG_SIZE)
+		Scan twice if cell count is between 33(WG_SIZE + 1) and 1024(WG_SIZE^2)
+		 - The reason for this is that every chunk of (WG_SIZE) cells produces
+		   a single value in the block sums array. The block sums array needs
+		   to be scanned by a single pass, thus its size needs to be at or below
+		   WG_SIZE. 
+		 - You can compute the number of scan passes needed for a given cellCount
+		   by taking the log base WG_SIZE of the value and rounding up.
+		 - You can compute the number of add passes needed for a given cellCount
+		   by subtracting 1 from the scanPasses. One add to add-back the values 
+		   of the second scan over the array
+		 - 64 cell case, WG_SIZE = 32
+		[32] [32] Scan 1 scans each individually
+		[2]		  Scan 2 scans the two values in block sums
+		--        Add 1 adds the sum of the first chunk to every value in the second chunk
 
+		*/
+
+		scanPasses = Math.ceil(baseLog(count, WG_SIZE));
 
 		// Up to 3 scan passes
-		for (var i = 0; i < scanPasses; i++) {
+		for (let i = 0; i < scanPasses; i++) {
+			// This is all routine
 			scanComputePass = encoder.beginComputePass(scanPassDescriptors[i]);
 			scanComputePass.setPipeline(prefixScanPipeline);
-	
 			scanComputePass.setBindGroup(0, scanBindGroups[i]);
+			/*
+			We want to dispatch a single workgroup per WG_SIZE chunk of the input array
+			So in our example, scan 1 needs 2 workgroups to be dispatched, 
+			one for each chunk of 32. 
+
+			Math.pow(WG_SIZE, i+1) yields 32^1 = 32
+			totalCellCount / Math.pow(...) = 16 / 32
+			Rounded up, this value is 1
+
+			Does this hold for larger sets?
+			 - Let's say there are 64 cells and WG_SIZE = 32.
+			 - totalCellCount / Math.pow(WG_SIZE, i + 1) = 64 / 32^1 = 2
+			 - Rounded up, the value is 2 workgroups
+			 - On the second pass i is 1
+			 - totalCellCount / Math.pow(WG_SIZE, 1 + 1) = 64 / 1024 = ~0.1. 
+			   Rounded up makes it 1, which is what we want *
+			*/
+
 			scanComputePass.dispatchWorkgroups(Math.ceil(totalCellCount / Math.pow(WG_SIZE, i + 1)));
 	
 			scanComputePass.end();
 		}
 
+		/*
+		scanComputePass = encoder.beginComputePass(scanPassDescriptors[3]);
+		scanComputePass.setPipeline(prefixAddPipeline);
+		scanComputePass.setBindGroup(0, scanBindGroups[3]);
+		scanComputePass.dispatchWorkgroups(Math.ceil(totalCellCount / Math.pow(WG_SIZE, 0)));
+		scanComputePass.end();
+		*/
+
 		// Up to 2 add passes
+		// Only loop for add passes if scanPasses is greater than 1
 		if (scanPasses > 1) {
-			for (var i = (scanPasses - 1); i > 0; i--) {
-				scanComputePass = encoder.beginComputePass(scanPassDescriptors[i + 3]);
+			// Start off by setting i initially to scanPasses - 1 which would be 
+			// 2 - 1 = 1 in the case of 64 by 32. 
+			// Iterate while i > 0
+			// Every pass decrements i by 1
+			for (let i = (scanPasses - 1); i > 0; i--) {
+
+				// The first add uses the 4th scanPassDescriptor while the second 
+				// add would use the 5th scanPassDescriptor. This, I think is incorrect. 
+				// The array scanPassDescriptors goes from 0 to 4
+				scanComputePass = encoder.beginComputePass(scanPassDescriptors[i + 2]);
+
+				// Routine
 				scanComputePass.setPipeline(prefixAddPipeline);
-		
-				scanComputePass.setBindGroup(0, scanBindGroups[i + 3]);
+				// Also fixed the off by one error here as well
+				scanComputePass.setBindGroup(0, scanBindGroups[i + 2]);
+
+
+				// Workgroups dispatched should mirror the output array
+				// In the case of the lower level add back, as many workgroups
+				// as was in the first prefix stage is needed
+				/*
+				 - i = 1, WG_SIZE = 32, cells = 64
+				 - 64 / 32^1 = 2
+
+				  - second stage example: i = 2, WG_Size = 32, cells = 4096
+				  - 4096 / 32^2 = 4
+				*/
 				scanComputePass.dispatchWorkgroups(Math.ceil(totalCellCount / Math.pow(WG_SIZE, i)));
 		
 				scanComputePass.end();
@@ -1340,12 +1476,12 @@ async function main() {
 		if (RENDER_PRIMITIVE) {
 			// small	
 			renderPass.setPipeline(vertexPipelineSmall);
-			renderPass.setBindGroup(0, vertexBindGroups[0]);
+			renderPass.setBindGroup(0, vertexBindGroup);
 			renderPass.draw(1, kNumObjects);
 		} else {
 			// normal
 			renderPass.setPipeline(vertexPipeline);
-			renderPass.setBindGroup(0, vertexBindGroups[0]);
+			renderPass.setBindGroup(0, vertexBindGroup);
 			renderPass.setVertexBuffer(0, vertexBuffer);
 			renderPass.draw(3, kNumObjects);
 		}
@@ -1368,7 +1504,7 @@ async function main() {
 			// Grid Render Pass <-------------------------------------------------
 			const gridRenderPass = encoder.beginRenderPass(gridRenderPassDescriptor);
 			gridRenderPass.setPipeline(vertexPipelineGrid);
-			gridRenderPass.setBindGroup(0, vertexBindGroups[0]);
+			gridRenderPass.setBindGroup(0, vertexBindGroup);
 			gridRenderPass.setVertexBuffer(0, gridVertexBuffer);
 			// Temporarily draw the vertices
 			// hardcoded grid edge count
@@ -1393,25 +1529,32 @@ async function main() {
 		if (cellCountersResults.mapState === 'unmapped') {
 			encoder.copyBufferToBuffer(cellCountersBuffer, 0, cellCountersResults, 0, cellCountersResults.size);
 		}
-		//*/
+
 
 		if (cellIndicesResults.mapState === 'unmapped') {
 			encoder.copyBufferToBuffer(cellIndicesBuffer, 0, cellIndicesResults, 0, cellIndicesResults.size);
 		}
 
+		
 		if (cellDataResults.mapState === 'unmapped') {
 			encoder.copyBufferToBuffer(cellDataBuffer, 0, cellDataResults, 0, cellDataResults.size);
 		}
+		
 
-		/*
-		if (blockSumsResults.mapState === 'unmapped') {
-			encoder.copyBufferToBuffer(blockSums, 0, blockSumsResults, 0, blockSumsResults.size);
+		
+		if (blockSumsL1Results.mapState === 'unmapped') {
+			encoder.copyBufferToBuffer(blockSumsL1, 0, blockSumsL1Results, 0, blockSumsL1Results.size);
 		}
-		*/
+
+		if (sblockSumsL1Results.mapState === 'unmapped') {
+			encoder.copyBufferToBuffer(sblockSumsL1, 0, sblockSumsL1Results, 0, sblockSumsL1Results.size);
+		}
+
 
 		device.queue.submit([encoder.finish()]);
 
-
+	
+		await device.queue.onSubmittedWorkDone();
 
 		if (cellCountersResults.mapState === 'unmapped') {
 			cellCountersResults.mapAsync(GPUMapMode.READ).then(() => {
@@ -1437,16 +1580,22 @@ async function main() {
 			});
 		}
 
-		/*
-		if (blockSumsResults.mapState === 'unmapped') {
-			blockSumsResults.mapAsync(GPUMapMode.READ).then(() => {
-				const ret = new Uint32Array(blockSumsResults.getMappedRange());
-				console.log(`SUMS: (current block sum): ${ret}`);
-				blockSumsResults.unmap();
+		if (blockSumsL1Results.mapState === 'unmapped') {
+			blockSumsL1Results.mapAsync(GPUMapMode.READ).then(() => {
+				const ret = new Uint32Array(blockSumsL1Results.getMappedRange());
+				console.log(`Block Sums: (start Index): ${ret}`);
+				blockSumsL1Results.unmap();
 			});
 		}
-		*/
-		
+
+		if (sblockSumsL1Results.mapState === 'unmapped') {
+			sblockSumsL1Results.mapAsync(GPUMapMode.READ).then(() => {
+				const ret = new Uint32Array(sblockSumsL1Results.getMappedRange());
+				console.log(`Scanned Block Sums: (start Index): ${ret}`);
+				sblockSumsL1Results.unmap();
+			});
+		}
+
 
 		// There is no guarantee when mapAsync will resolve. Most likely a 
 		// reading on the times will only arrive every other frame
@@ -1477,8 +1626,6 @@ async function main() {
 				gpuTime = computeTime + renderTime;
 
 				countAverage.addSample(countTime / 1000000);
-				// ms
-				//allocAverage.addSample(allocTime / 1000000);
 
 				//us
 				scan0Average.addSample(scan0Time / 1000);
@@ -1487,6 +1634,7 @@ async function main() {
 				add1Average.addSample(add1Time / 1000);
 				add0Average.addSample(add0Time / 1000);
 
+				// Dividing by 1000 yields microseconds here
 				allocAverage.addSample(allocTime / 1000);
 
 				fillAverage.addSample(fillTime / 1000000);

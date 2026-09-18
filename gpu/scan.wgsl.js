@@ -1,5 +1,6 @@
-// Vector for workgroup dimensions
-export const WG_SIZE = 256;
+// Workgroup size here is 32 because we are trying to match workgroup size
+// with subgroup size
+export const WG_SIZE = 32;
 
 export const SCAN_SHADER = 
 `
@@ -60,44 +61,49 @@ export const SCAN_SHADER =
 		@builtin(subgroup_id) sg_id: u32, // workgroup subgroup id
 		@builtin(num_subgroups) num_sg: u32, // API support for num subgroups
 	) {
+		// Capture the number of elements in the input array for range check
 		let n: u32 = arrayLength(&g_idata);
+		// Grab current global thread ID and Workgroup ID
 		let thid: u32 = g_id.x;
 		let wid: u32 = wg_id.x;
+
+		// Check if this global thread id is out of bounds. T if in bounds, F otherwise
 		let in_range: bool = thid < n;
+
+		// Initialize the value to be prefixed
 		var val: u32 = 0u;
 
+
+		// Only pull value if the thread is in range. The out of range error will
+		// only occur if the array size is not a multiple of WG_SIZE
 		if (in_range) {
 			val = g_idata[thid];
 		}
 
+
+
+		// This is where the actual prefix is exctracted. Since exclusive, this
+		// value is the starting index of the cell
 		let sg_prefix: u32 = subgroupExclusiveAdd(val);
 
-		// total sum of the subgroup
-		let sg_sum: u32 = subgroupAdd(val);
+		// total sum of the subgroup. Every thread needs this to avoid thread 
+		// divergence. Only one thread will write this to sg_sums. Note!! This 
+		// value is the sum of all values in the subgroup. Thus, it should be 
+		// equal to the first value of the next sg_sums array
+		let sg_sum: u32 = subgroupAdd(val); 
 
-		// write subgroup sum to workgroup memory
+		// write subgroup sum to workgroup memory. Only the first thread in this 
+		// subgroup gets to write its value to memory
 		if (sg_lane == 0u) {
 			sg_sums[sg_id] = sg_sum;
 		}
+		// All threads finish, then
 		workgroupBarrier();
 
-
-		/*
-		// whole first subgroup scans the subgroups
-		if (sg_id == 0u) {
-			let val_sg = select(0u, sg_sums[sg_lane], sg_lane < num_sg);
-			let scanned = subgroupExclusiveAdd(val_sg);
-			if (sg_lane < num_sg) {
-				sg_sums[sg_lane] = scanned;
-			}
-			if (sg_lane == 0u && wid < arrayLength(&block_sums)) {
-				block_sums[wid] = scanned + subgroupAdd(val_sg);
-			}
-		}
-		*/	
-
-
 		// thread scan
+		// Very first thread sums up the subgroup sums values and writes the 
+		// sum of the subgroup values to a sg_sum_total variable. This sg_sum_total
+		// needs to be written to block_sums(which it is). 
 		if (l_id.x == 0u) {
 			var sg_sum_total: u32 = 0u;
 			for (var i = 0u; i < num_sg; i += 1u) {
@@ -113,13 +119,19 @@ export const SCAN_SHADER =
 				block_sums[wid] = sg_sum_total;
 			}
 		}
-		
+
+		// All threads wait for the first to finish
 		workgroupBarrier();
 
 
 		// Only write the start index to output. 
+		// Only the threads in range write setting the output data array equal to 
+		// the value of exclusive add plus the (sg_sums[sg_id]?)
 		if (in_range) {
 			g_odata[thid] = sg_sums[sg_id] + sg_prefix;
+
+			// Does nothing code
+			//g_odata[thid] = g_idata[thid];
 		}
 	}
 
@@ -127,7 +139,7 @@ export const SCAN_SHADER =
 	// write back function adds each block sum to the respective input data 
 
 	@compute
-	@workgroup_size(${WG_SIZE}, 1, 1)
+	@workgroup_size(${WG_SIZE})
 	fn add (
 		@builtin(global_invocation_id) g_id: vec3u, // thread id
 		@builtin(workgroup_id) wg_id: vec3u, // workgroup index
@@ -141,9 +153,14 @@ export const SCAN_SHADER =
 
 		let wid: u32 = wg_id.x;
 
+		/*
 		if (wid > 0u) {
 			g_odata[thid] += block_sums[wid - 1u];
 		}
+		*/
+
+		// Since prefix is exclusive, block_sums[wid] is correct
+		g_odata[thid] += (block_sums[wid]);
 	}
 
 `;

@@ -235,7 +235,6 @@ export const COMPUTE_SHADER_CODE =
 		// read boids into dest array in sorted order
 		// For future: write updated boids to src array
 		let thid: u32 = input.id.x;
-		//let idx: u32 = cellData[cellIndices[thid].cell].startIndex + cellIndices[thid].indexWithinCell;
 		let idx: u32 = cellData[cellIndices[thid].cell] + cellIndices[thid].indexWithinCell;
 		outputPositions[idx] = inputPositions[thid];
 		outputVelocities[idx] = inputVelocities[thid];
